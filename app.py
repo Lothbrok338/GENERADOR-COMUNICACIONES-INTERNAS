@@ -88,14 +88,15 @@ with st.sidebar:
                 mime="text/csv", 
                 use_container_width=True
             )
-            
-        st.markdown("---")
-        if st.button("🗑️ Resetear Memoria del Sistema", type="secondary", use_container_width=True):
-            for key in list(st.session_state.keys()): 
-                del st.session_state[key]
-            st.rerun()
     else:
         st.info("Los layouts de descarga se generarán aquí conforme valide las transacciones en la mesa de trabajo.")
+
+    # --- BOTÓN SOLICITADO: SIEMPRE DISPONIBLE EN EL PANEL IZQUIERDO ---
+    st.markdown("---")
+    if st.button("🗑️ Limpiar y Borrar Todo", type="secondary", use_container_width=True):
+        for key in list(st.session_state.keys()): 
+            del st.session_state[key]
+        st.rerun()
 
 # --- ÁREA PRINCIPAL (PANTALLA COMPLETA) ---
 if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and not st.session_state.df_com.empty:
