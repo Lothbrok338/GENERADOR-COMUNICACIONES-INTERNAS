@@ -87,7 +87,7 @@ with st.sidebar:
 # --- ÁREA PRINCIPAL (PANTALLA COMPLETA HASTA LA DERECHA) ---
 if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and not st.session_state.df_com.empty:
     
-    # Controles superiores extendidos
+    # Controles superiores de asignación
     col_dia, col_btn1, col_btn2 = st.columns([3, 1, 1])
     with col_dia: dia_actual = st.selectbox("📅 Asignar las transacciones marcadas al periodo:", [f"Día {i}" for i in range(1, 32)])
     with col_btn1: 
@@ -99,22 +99,40 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
             st.session_state.marcar_todo = False
             st.rerun()
 
-    # Filtrado dinámico de filas (Bandeja de entrada Cero)
+    # Filtrado dinámico inicial (Bandeja de entrada Cero: no procesados)
     df_pendientes_cajas = st.session_state.df_cajas[st.session_state.df_cajas['PROCESADO'] == False].copy()
     df_pendientes_atc = st.session_state.df_atc[st.session_state.df_atc['PROCESADO'] == False].copy()
     df_pendientes_com = st.session_state.df_com[st.session_state.df_com['PROCESADO'] == False].copy()
 
-    # Inyectar booleanos de control de selección
+    # --- DETECCIÓN E IMPLEMENTACIÓN DEL FILTRO DE CAJA POR DESPLEGABLE ---
+    col_caja_field = None
+    for col in df_pendientes_cajas.columns:
+        if 'CAJA' in col:
+            col_caja_field = col
+            break
+
+    caja_filtrada = "Mostrar Todas"
+    st.markdown("---")
+    
+    if col_caja_field:
+        # Generar lista de cajas únicas disponibles basadas en registros no procesados
+        opciones_caja = ["Mostrar Todas"] + sorted([str(x) for x in df_pendientes_cajas[col_caja_field].unique() if pd.notna(x)])
+        caja_filtrada = st.selectbox("🔍 Filtrar Mesa de Trabajo por Código de Caja / Cajero:", opciones_caja, key="filtro_dinamico_caja")
+        
+        # Aplicar filtro si el usuario selecciona una caja en específico
+        if caja_filtrada != "Mostrar Todas":
+            df_pendientes_cajas = df_pendientes_cajas[df_pendientes_cajas[col_caja_field].astype(str) == caja_filtrada]
+
+    # Inyectar columnas booleanas de control de selección visual
     df_pendientes_cajas.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
     df_pendientes_atc.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
     df_pendientes_com.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
 
-    key_suffix = f"{dia_actual}_{st.session_state.marcar_todo}"
+    # El sufijo de clave asegura la reactividad al cambiar de día, filtro o selección masiva
+    key_suffix = f"{dia_actual}_{st.session_state.marcar_todo}_{caja_filtrada}"
 
-    st.markdown("---")
-    
     # SECCIÓN DE TABLAS TOTALMENTE EXPANDIDAS HORIZONTALMENTE
-    st.subheader(f"🛒 Consolidado Cajas Diarias — ({len(df_pendientes_cajas)} registros pendientes)")
+    st.subheader(f"🛒 Consolidado Cajas Diarias — ({len(df_pendientes_cajas)} registros visualizados)")
     edit_cajas = st.data_editor(df_pendientes_cajas, hide_index=True, use_container_width=True, height=400, key=f"ed_c_{key_suffix}")
     
     st.subheader(f"💳 Transacciones ATC Unificado — ({len(df_pendientes_atc)} registros pendientes)")
@@ -134,10 +152,10 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
         if sel_cajas.empty and sel_atc.empty and sel_com.empty:
             st.warning("⚠️ No ha seleccionado ninguna transacción válida para procesar.")
         else:
-            # Registrar filas como procesadas de forma interna
-            st.session_state.df_cajas.loc[sel_cajas['ORIGINAL_INDEX'], 'PROCESADO'] = True
-            st.session_state.df_atc.loc[sel_atc['ORIGINAL_INDEX'], 'PROCESADO'] = True
-            st.session_state.df_com.loc[sel_com['ORIGINAL_INDEX'], 'PROCESADO'] = True
+            # Registrar filas como procesadas referenciando sus índices originales mapeados
+            if not sel_cajas.empty: st.session_state.df_cajas.loc[sel_cajas['ORIGINAL_INDEX'], 'PROCESADO'] = True
+            if not sel_atc.empty: st.session_state.df_atc.loc[sel_atc['ORIGINAL_INDEX'], 'PROCESADO'] = True
+            if not sel_com.empty: st.session_state.df_com.loc[sel_com['ORIGINAL_INDEX'], 'PROCESADO'] = True
 
             # Limpieza quirúrgica de asignaciones
             def limpiar_asig(df, col, respaldo):
@@ -148,7 +166,7 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
             if not sel_atc.empty: sel_atc['ZUONR_FINAL'] = limpiar_asig(sel_atc, 'ASIGNACION', 'CÓDIGO ASIENTO')
             if not sel_com.empty: sel_com['ZUONR_FINAL'] = limpiar_asig(sel_com, 'ASIGNACION', '')
 
-            # Parseo monetario limpio
+            # Parseo monetario técnico uniforme
             def parse_monto(df, col):
                 return df[col].astype(str).str.replace(',', '.').astype(float)
 
