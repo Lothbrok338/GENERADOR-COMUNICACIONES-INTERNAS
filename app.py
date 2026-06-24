@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 import io
-import re  # NUEVO: Librería para buscar palabras dentro del nombre del archivo
+import re
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Consolidación SAP - Univalle", layout="wide")
 
+# Título corporativo oficial
 st.title("🏛️ Sistema de Consolidación Contable SAP")
 st.markdown("Plataforma centralizada para la validación, unificación y generación de asientos contables financieros. Utilice el panel lateral para iniciar la ingesta de datos.")
 
@@ -17,46 +18,49 @@ if 'plantilla_maestra' not in st.session_state:
 if 'marcar_todo' not in st.session_state:
     st.session_state.marcar_todo = True
 
+# DataFrames de control de estado interno
 for key in ['df_cajas', 'df_atc', 'df_com']:
     if key not in st.session_state:
         st.session_state[key] = pd.DataFrame()
 
+# Estabilidad de nombres de archivos cargados
 for key in ['name_cajas', 'name_atc', 'name_com']:
     if key not in st.session_state:
         st.session_state[key] = ""
 
-# --- FUNCIÓN PARA CARGAR, ETIQUETAR Y EXTRAER CAJA DEL NOMBRE ---
-def procesar_subida(file_obj, state_name, state_df):
+# --- FUNCIÓN DE INGESTA Y EXTRACCIÓN DE METADATOS ---
+def procesar_subida(file_obj, state_name, state_df, tipo_archivo):
     if file_obj and st.session_state[state_name] != file_obj.name:
         df = pd.read_excel(file_obj)
         df.columns = df.columns.str.strip().str.upper()
         df['PROCESADO'] = False 
         df['ORIGINAL_INDEX'] = df.index 
         
-        # MAGIA: Buscar código de caja en el nombre del archivo si no existe la columna
-        tiene_caja = any('CAJA' in col for col in df.columns)
-        if not tiene_caja:
-            nombre_archivo = file_obj.name.upper()
-            # Busca patrones como SFC102, SFC107, SOUVENIR
-            match = re.search(r'(SFC\d+|SOUVENIRS?)', nombre_archivo)
-            if match:
-                codigo = match.group(1)
-                if codigo == 'SOUVENIR': codigo = 'SOUVENIRS' # Estandarizar nombre
-                df['NÚMERO DE CAJA'] = codigo # Creamos la columna dinámicamente
+        # Guardamos el nombre del archivo limpio para usarlo como filtro dinámico (ideal para Comunicaciones)
+        nombre_limpio = file_obj.name.split('.')[0].upper().replace('_', ' ')
+        df['FUENTE_ARCHIVO'] = nombre_limpio
+        
+        # Extracción automática de código de caja desde el nombre del archivo para ATC
+        if tipo_archivo == 'ATC':
+            tiene_caja = any('CAJA' in col for col in df.columns)
+            if not tiene_caja:
+                match = re.search(r'(SFC\d+|SOUVENIRS?)', file_obj.name.upper())
+                df['NÚMERO DE CAJA'] = match.group(1) if match else 'GENERAL'
                 
         st.session_state[state_df] = df
         st.session_state[state_name] = file_obj.name
 
-# --- PANEL LATERAL ---
+# --- PANEL LATERAL (SIDEBAR) CONTROLES Y EXPORTACIÓN ---
 with st.sidebar:
     st.header("⚙️ Módulo de Ingesta")
     file_cajas = st.file_uploader("📂 Cargar extracto CAJAS", type=["xlsx", "xls"])
     file_atc = st.file_uploader("📂 Cargar extracto ATC", type=["xlsx", "xls"])
     file_com = st.file_uploader("📂 Cargar extracto COMUNICACIONES", type=["xlsx", "xls"])
 
-    procesar_subida(file_cajas, 'name_cajas', 'df_cajas')
-    procesar_subida(file_atc, 'name_atc', 'df_atc')
-    procesar_subida(file_com, 'name_com', 'df_com')
+    # Procesar subidas identificando el tipo de flujo
+    procesar_subida(file_cajas, 'name_cajas', 'df_cajas', 'CAJAS')
+    procesar_subida(file_atc, 'name_atc', 'df_atc', 'ATC')
+    procesar_subida(file_com, 'name_com', 'df_com', 'COMUN')
 
     st.markdown("---")
     st.header("📦 Archivos Listos (Layout SAP)")
@@ -69,6 +73,7 @@ with st.sidebar:
             df_dia = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] == dia].copy()
             df_export = df_dia.drop(columns=['DIA_ETIQUETA'])
             
+            # Formatos de salida estándar para SAP
             df_export['VALUT'] = pd.to_datetime(df_export['VALUT']).dt.strftime('%d/%m/%Y')
             def string_format_sap(val):
                 try: return f"{float(val):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
@@ -76,18 +81,26 @@ with st.sidebar:
             df_export['WRSOL'] = df_export['WRSOL'].apply(string_format_sap)
             
             csv_data = df_export.to_csv(index=False, sep='|', header=True)
-            st.download_button(label=f"⬇️ Descargar Layout {dia}", data=csv_data, file_name=f"SAP_{dia.replace(' ', '_')}.csv", mime="text/csv", use_container_width=True)
+            st.download_button(
+                label=f"⬇️ Descargar Layout {dia}", 
+                data=csv_data, 
+                file_name=f"SAP_{dia.replace(' ', '_')}.csv", 
+                mime="text/csv", 
+                use_container_width=True
+            )
             
         st.markdown("---")
         if st.button("🗑️ Resetear Memoria del Sistema", type="secondary", use_container_width=True):
-            for key in list(st.session_state.keys()): del st.session_state[key]
+            for key in list(st.session_state.keys()): 
+                del st.session_state[key]
             st.rerun()
     else:
-        st.info("Los layouts de descarga se generarán aquí conforme valide las transacciones.")
+        st.info("Los layouts de descarga se generarán aquí conforme valide las transacciones en la mesa de trabajo.")
 
-# --- ÁREA PRINCIPAL ---
+# --- ÁREA PRINCIPAL (PANTALLA COMPLETA) ---
 if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and not st.session_state.df_com.empty:
     
+    # Controles superiores de asignación de periodo
     col_dia, col_btn1, col_btn2 = st.columns([3, 1, 1])
     with col_dia: dia_actual = st.selectbox("📅 Asignar las transacciones marcadas al periodo:", [f"Día {i}" for i in range(1, 32)])
     with col_btn1: 
@@ -99,11 +112,18 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
             st.session_state.marcar_todo = False
             st.rerun()
 
+    # Filtrado dinámico inicial (Bandeja de entrada Cero: solo registros pendientes)
     df_pendientes_cajas = st.session_state.df_cajas[st.session_state.df_cajas['PROCESADO'] == False].copy()
     df_pendientes_atc = st.session_state.df_atc[st.session_state.df_atc['PROCESADO'] == False].copy()
     df_pendientes_com = st.session_state.df_com[st.session_state.df_com['PROCESADO'] == False].copy()
 
-    # --- FILTRADO MAESTRO CONECTADO ---
+    st.markdown("---")
+    st.subheader("🔍 Filtros Avanzados de Operación")
+    
+    # --- FILTROS DESPLEGABLES DINÁMICOS ---
+    col_filtro_caja, col_filtro_com = st.columns(2)
+    
+    # 1. Identificar la columna de Caja en Cajas Contables
     col_caja_field = None
     for col in df_pendientes_cajas.columns:
         if 'CAJA' in col:
@@ -111,37 +131,55 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
             break
 
     caja_filtrada = "Mostrar Todas"
-    st.markdown("---")
-    
     if col_caja_field:
-        opciones_caja = ["Mostrar Todas"] + sorted([str(x) for x in df_pendientes_cajas[col_caja_field].unique() if pd.notna(x)])
-        caja_filtrada = st.selectbox("🔍 Filtrar Mesa de Trabajo por Código de Caja / Cajero:", opciones_caja, key="filtro_dinamico_caja")
-        
-        # Filtramos todas las tablas si tienen la columna CAJA
-        if caja_filtrada != "Mostrar Todas":
-            df_pendientes_cajas = df_pendientes_cajas[df_pendientes_cajas[col_caja_field].astype(str) == caja_filtrada]
-            if col_caja_field in df_pendientes_atc.columns:
-                df_pendientes_atc = df_pendientes_atc[df_pendientes_atc[col_caja_field].astype(str) == caja_filtrada]
-            if col_caja_field in df_pendientes_com.columns:
-                df_pendientes_com = df_pendientes_com[df_pendientes_com[col_caja_field].astype(str) == caja_filtrada]
+        # Combinar códigos de caja disponibles en Cajas y ATC para armar el filtro unificado
+        cajas_unicas = set(df_pendientes_cajas[col_caja_field].dropna().astype(str))
+        if 'NÚMERO DE CAJA' in df_pendientes_atc.columns:
+            cajas_unicas.update(df_pendientes_atc['NÚMERO DE CAJA'].dropna().astype(str))
+            
+        opciones_caja = ["Mostrar Todas"] + sorted(list(cajas_unicas))
+        with col_filtro_caja:
+            caja_filtrada = st.selectbox("🛒 Filtrar Cajas y ATC por Código de Cajero:", opciones_caja, key="filtro_caja_master")
 
+    # 2. Identificar Archivos de Comunicaciones cargados (Soporta saltos de día perfectamente)
+    com_filtrada = "Mostrar Todas"
+    if 'FUENTE_ARCHIVO' in df_pendientes_com.columns:
+        opciones_com = ["Mostrar Todas"] + sorted(list(df_pendientes_com['FUENTE_ARCHIVO'].unique()))
+        with col_filtro_com:
+            com_filtrada = st.selectbox("📑 Filtrar Comunicaciones Internas por Documento / Día:", opciones_com, key="filtro_com_master")
+
+    # --- APLICACIÓN EN TIEMPO REAL DE LOS FILTROS ---
+    if caja_filtrada != "Mostrar Todas":
+        df_pendientes_cajas = df_pendientes_cajas[df_pendientes_cajas[col_caja_field].astype(str) == caja_filtrada]
+        if 'NÚMERO DE CAJA' in df_pendientes_atc.columns:
+            df_pendientes_atc = df_pendientes_atc[df_pendientes_atc['NÚMERO DE CAJA'].astype(str) == caja_filtrada]
+
+    if com_filtrada != "Mostrar Todas":
+        df_pendientes_com = df_pendientes_com[df_pendientes_com['FUENTE_ARCHIVO'] == com_filtrada]
+
+    # Inyectar columnas de selección visual (Checkbox en la primera columna)
     df_pendientes_cajas.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
     df_pendientes_atc.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
     df_pendientes_com.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
 
-    key_suffix = f"{dia_actual}_{st.session_state.marcar_todo}_{caja_filtrada}"
+    # Sufijo único reactivo
+    key_suffix = f"{dia_actual}_{st.session_state.marcar_todo}_{caja_filtrada}_{com_filtrada}"
 
-    st.subheader(f"🛒 Consolidado Cajas Diarias — ({len(df_pendientes_cajas)} registros visualizados)")
+    st.markdown("---")
+    
+    # --- MESA DE TRABAJO EXTENDIDA HORIZONTALMENTE ---
+    st.subheader(f"🛒 Consolidado Cajas Diarias — ({len(df_pendientes_cajas)} registros filtrados)")
     edit_cajas = st.data_editor(df_pendientes_cajas, hide_index=True, use_container_width=True, height=400, key=f"ed_c_{key_suffix}")
     
-    st.subheader(f"💳 Transacciones ATC Unificado — ({len(df_pendientes_atc)} registros visualizados)")
+    st.subheader(f"💳 Transacciones ATC Unificado — ({len(df_pendientes_atc)} registros filtrados)")
     edit_atc = st.data_editor(df_pendientes_atc, hide_index=True, use_container_width=True, height=400, key=f"ed_a_{key_suffix}")
     
-    st.subheader(f"📑 Flujo Comunicaciones Internas — ({len(df_pendientes_com)} registros visualizados)")
+    st.subheader(f"📑 Flujo Comunicaciones Internas — ({len(df_pendientes_com)} registros filtrados)")
     edit_com = st.data_editor(df_pendientes_com, hide_index=True, use_container_width=True, height=400, key=f"ed_co_{key_suffix}")
 
     st.markdown("<br><br>", unsafe_allow_html=True)
     
+    # Botón maestro de procesamiento
     if st.button(f"🚀 VERIFICAR Y ANEXAR TRANSACCIONES AL {dia_actual.upper()}", type="primary", use_container_width=True):
         sel_cajas = edit_cajas[edit_cajas['SELECCIONAR'] == True].copy()
         sel_atc = edit_atc[edit_atc['SELECCIONAR'] == True].copy()
@@ -150,10 +188,12 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
         if sel_cajas.empty and sel_atc.empty and sel_com.empty:
             st.warning("⚠️ No ha seleccionado ninguna transacción válida para procesar.")
         else:
+            # Marcar filas procesadas usando sus índices reales de memoria
             if not sel_cajas.empty: st.session_state.df_cajas.loc[sel_cajas['ORIGINAL_INDEX'], 'PROCESADO'] = True
             if not sel_atc.empty: st.session_state.df_atc.loc[sel_atc['ORIGINAL_INDEX'], 'PROCESADO'] = True
             if not sel_com.empty: st.session_state.df_com.loc[sel_com['ORIGINAL_INDEX'], 'PROCESADO'] = True
 
+            # Limpieza estructural de asignaciones
             def limpiar_asig(df, col, respaldo):
                 if df.empty: return df
                 return df.get(col, df.get(respaldo, '')).fillna('').astype(str).replace('nan', '', regex=True)
@@ -162,9 +202,11 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
             if not sel_atc.empty: sel_atc['ZUONR_FINAL'] = limpiar_asig(sel_atc, 'ASIGNACION', 'CÓDIGO ASIENTO')
             if not sel_com.empty: sel_com['ZUONR_FINAL'] = limpiar_asig(sel_com, 'ASIGNACION', '')
 
+            # Parseo numérico flotante uniforme
             def parse_monto(df, col):
                 return df[col].astype(str).str.replace(',', '.').astype(float)
 
+            # Mapeo estructurado para las salidas de SAP
             sap_cajas = pd.DataFrame() if sel_cajas.empty else pd.DataFrame({
                 'DIA_ETIQUETA': dia_actual, 'BUKRS': 'BO01', 'HKONT': sel_cajas['CUENTA CONTABLE'], 'SGTXT': sel_cajas['GLOSA RECORTADA'],
                 'WRSOL': parse_monto(sel_cajas, 'CRÉDITOS'), 'WRHAB': '', 'PRCTR': '10010101',
@@ -183,12 +225,13 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
                 'VALUT': pd.to_datetime(sel_com['FECHA']), 'ZUONR': sel_com['ZUONR_FINAL']
             })
 
+            # Guardar lote consolidado en la memoria maestra
             bloque_dia = pd.concat([sap_cajas, sap_atc, sap_com])
             for col in st.session_state.plantilla_maestra.columns:
                 if col not in bloque_dia.columns: bloque_dia[col] = ''
             
             st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque_dia], ignore_index=True)
-            st.success(f"🎉 ¡Periodo conciliado exitosamente! Las transacciones han sido anexadas al {dia_actual}.")
+            st.success(f"🎉 ¡Conciliación exitosa! Registros anexados al {dia_actual}.")
             st.rerun()
 else:
     st.info("👋 ¡Bienvenido! Por favor, diríjase al panel lateral izquierdo para cargar los extractos maestros correspondientes a Cajas, ATC y Comunicaciones.")
