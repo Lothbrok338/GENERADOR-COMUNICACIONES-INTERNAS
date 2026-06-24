@@ -2,11 +2,12 @@ import streamlit as st
 import pandas as pd
 import io
 
-# Configuración de página ancha nativa
-st.set_page_config(page_title="Consolidador SAP Interactivo", layout="wide")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Consolidación SAP - Univalle", layout="wide")
 
-st.title("🗂️ Consolidador SAP - Modo Pantalla Completa")
-st.write("Las tablas ahora se expanden **hasta el extremo derecho de la pantalla** para darte máxima visibilidad. Usa el panel izquierdo para cargar y exportar.")
+# Título corporativo
+st.title("🏛️ Sistema de Consolidación Contable SAP")
+st.markdown("Plataforma centralizada para la validación, unificación y generación de asientos contables financieros. Utilice el panel lateral para iniciar la ingesta de datos.")
 
 # --- 1. INICIALIZAR MEMORIA Y ESTADOS ---
 if 'plantilla_maestra' not in st.session_state:
@@ -38,10 +39,10 @@ def procesar_subida(file_obj, state_name, state_df):
 
 # --- PANEL LATERAL (SIDEBAR) CONTROLES Y EXPORTACIÓN ---
 with st.sidebar:
-    st.header("⚙️ Panel de Control")
-    file_cajas = st.file_uploader("📂 Cargar CAJAS", type=["xlsx", "xls"])
-    file_atc = st.file_uploader("📂 Cargar ATC", type=["xlsx", "xls"])
-    file_com = st.file_uploader("📂 Cargar COMUNICACIONES", type=["xlsx", "xls"])
+    st.header("⚙️ Módulo de Ingesta")
+    file_cajas = st.file_uploader("📂 Cargar extracto CAJAS", type=["xlsx", "xls"])
+    file_atc = st.file_uploader("📂 Cargar extracto ATC", type=["xlsx", "xls"])
+    file_com = st.file_uploader("📂 Cargar extracto COMUNICACIONES", type=["xlsx", "xls"])
 
     # Inyectar datos a memoria de fondo
     procesar_subida(file_cajas, 'name_cajas', 'df_cajas')
@@ -49,11 +50,11 @@ with st.sidebar:
     procesar_subida(file_com, 'name_com', 'df_com')
 
     st.markdown("---")
-    st.header("📦 Archivos Listos SAP")
+    st.header("📦 Archivos Listos (Layout SAP)")
     
     if len(st.session_state.plantilla_maestra) > 0:
         dias_procesados = st.session_state.plantilla_maestra['DIA_ETIQUETA'].unique()
-        st.success(f"📊 {len(dias_procesados)} periodos guardados:")
+        st.success(f"📊 {len(dias_procesados)} periodos guardados en memoria:")
 
         for dia in sorted(dias_procesados):
             df_dia = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] == dia].copy()
@@ -67,22 +68,28 @@ with st.sidebar:
             df_export['WRSOL'] = df_export['WRSOL'].apply(string_format_sap)
             
             csv_data = df_export.to_csv(index=False, sep='|', header=True)
-            st.download_button(label=f"⬇️ Descargar {dia}", data=csv_data, file_name=f"SAP_{dia.replace(' ', '_')}.csv", mime="text/csv", use_container_width=True)
+            st.download_button(
+                label=f"⬇️ Descargar Layout {dia}", 
+                data=csv_data, 
+                file_name=f"SAP_{dia.replace(' ', '_')}.csv", 
+                mime="text/csv", 
+                use_container_width=True
+            )
             
         st.markdown("---")
-        if st.button("🗑️ Resetear Todo de Cero", type="secondary", use_container_width=True):
+        if st.button("🗑️ Resetear Memoria del Sistema", type="secondary", use_container_width=True):
             for key in list(st.session_state.keys()): 
                 del st.session_state[key]
             st.rerun()
     else:
-        st.info("Los botones de descarga aparecerán aquí conforme vayas confirmando días en la mesa principal.")
+        st.info("Los layouts de descarga se generarán aquí conforme valide las transacciones en la mesa de trabajo principal.")
 
 # --- ÁREA PRINCIPAL (PANTALLA COMPLETA HASTA LA DERECHA) ---
 if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and not st.session_state.df_com.empty:
     
     # Controles superiores extendidos
     col_dia, col_btn1, col_btn2 = st.columns([3, 1, 1])
-    with col_dia: dia_actual = st.selectbox("📅 Asignar las filas marcadas al periodo:", [f"Día {i}" for i in range(1, 32)])
+    with col_dia: dia_actual = st.selectbox("📅 Asignar las transacciones marcadas al periodo:", [f"Día {i}" for i in range(1, 32)])
     with col_btn1: 
         if st.button("✅ Marcar Todo", use_container_width=True): 
             st.session_state.marcar_todo = True
@@ -107,25 +114,25 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
     st.markdown("---")
     
     # SECCIÓN DE TABLAS TOTALMENTE EXPANDIDAS HORIZONTALMENTE
-    st.subheader(f"🛒 Cajas Diarias — ({len(df_pendientes_cajas)} registros pendientes)")
+    st.subheader(f"🛒 Consolidado Cajas Diarias — ({len(df_pendientes_cajas)} registros pendientes)")
     edit_cajas = st.data_editor(df_pendientes_cajas, hide_index=True, use_container_width=True, height=400, key=f"ed_c_{key_suffix}")
     
-    st.subheader(f"💳 ATC Unificado — ({len(df_pendientes_atc)} registros pendientes)")
+    st.subheader(f"💳 Transacciones ATC Unificado — ({len(df_pendientes_atc)} registros pendientes)")
     edit_atc = st.data_editor(df_pendientes_atc, hide_index=True, use_container_width=True, height=400, key=f"ed_a_{key_suffix}")
     
-    st.subheader(f"📑 Comunicaciones Internas — ({len(df_pendientes_com)} registros pendientes)")
+    st.subheader(f"📑 Flujo Comunicaciones Internas — ({len(df_pendientes_com)} registros pendientes)")
     edit_com = st.data_editor(df_pendientes_com, hide_index=True, use_container_width=True, height=400, key=f"ed_co_{key_suffix}")
 
     st.markdown("<br><br>", unsafe_allow_html=True)
     
     # Botón maestro de confirmación de filas
-    if st.button(f"🚀 PROCESAR Y ENVIAR FILAS MARCADAS AL {dia_actual.upper()}", type="primary", use_container_width=True):
+    if st.button(f"🚀 VERIFICAR Y ANEXAR TRANSACCIONES AL {dia_actual.upper()}", type="primary", use_container_width=True):
         sel_cajas = edit_cajas[edit_cajas['SELECCIONAR'] == True].copy()
         sel_atc = edit_atc[edit_atc['SELECCIONAR'] == True].copy()
         sel_com = edit_com[edit_com['SELECCIONAR'] == True].copy()
 
         if sel_cajas.empty and sel_atc.empty and sel_com.empty:
-            st.warning("⚠️ No has seleccionado ninguna fila válida.")
+            st.warning("⚠️ No ha seleccionado ninguna transacción válida para procesar.")
         else:
             # Registrar filas como procesadas de forma interna
             st.session_state.df_cajas.loc[sel_cajas['ORIGINAL_INDEX'], 'PROCESADO'] = True
@@ -170,7 +177,7 @@ if not st.session_state.df_cajas.empty and not st.session_state.df_atc.empty and
                 if col not in bloque_dia.columns: bloque_dia[col] = ''
             
             st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque_dia], ignore_index=True)
-            st.success(f"🎉 ¡Fase completada! Filas asignadas y empaquetadas en el {dia_actual}.")
+            st.success(f"🎉 ¡Periodo conciliado exitosamente! Las transacciones han sido anexadas al {dia_actual}.")
             st.rerun()
 else:
-    st.info("👋 ¡Bienvenido! Por favor, ve al panel lateral izquierdo para cargar tus archivos maestros de Cajas, ATC y Comunicaciones.")
+    st.info("👋 ¡Bienvenido! Por favor, diríjase al panel lateral izquierdo para cargar los extractos maestros correspondientes a Cajas, ATC y Comunicaciones.")
