@@ -2,141 +2,139 @@ import streamlit as st
 import pandas as pd
 import io
 
-# 1. CONFIGURACIÓN DE LA PÁGINA
-st.set_page_config(page_title="Consolidador Acumulativo SAP", layout="wide")
+st.set_page_config(page_title="Consolidador SAP Interactivo", layout="wide")
 
-st.title("🗂️ Consolidador Stateful SAP por Días - Univalle")
-st.write("Sube los archivos de forma secuencial (día por día). Los datos se irán acumulando de forma segura en la memoria de la aplicación.")
+st.title("🗂️ Consolidador SAP - Selección por Día")
+st.write("Sube tus archivos, selecciona las filas correspondientes al día actual y confírmalas. Podrás descargar un archivo individual por cada día procesado.")
 
-# 2. INICIALIZACIÓN DE LA MEMORIA (session_state)
+# --- INICIALIZAR MEMORIA ---
 if 'plantilla_maestra' not in st.session_state:
-    # Creamos un DataFrame vacío con las 19 columnas oficiales de tu plantilla SAP
-    columnas_sap = ['BUKRS', 'HKONT', 'SGTXT', 'WRSOL', 'WRHAB', 'DMBTR', 'DMBE2', 'MWSKZ', 'TXJCD', 'KOSTL', 'PRCTR', 'AUFNR', 'PS_POSID', 'VALUT', 'HBKID', 'HKTID', 'ZUONR', 'VBUND', 'FIPEX']
+    # Agregamos una columna de control interna llamada 'DIA_ETIQUETA'
+    columnas_sap = ['DIA_ETIQUETA', 'BUKRS', 'HKONT', 'SGTXT', 'WRSOL', 'WRHAB', 'DMBTR', 'DMBE2', 'MWSKZ', 'TXJCD', 'KOSTL', 'PRCTR', 'AUFNR', 'PS_POSID', 'VALUT', 'HBKID', 'HKTID', 'ZUONR', 'VBUND', 'FIPEX']
     st.session_state.plantilla_maestra = pd.DataFrame(columns=columnas_sap)
 
-# 3. CONTROLES DE LA INTERFAZ
-col_control, col_resumen = st.columns([1, 2])
+# --- FUNCIÓN PARA CARGAR SIN RECARGAR LA PÁGINA ---
+@st.cache_data
+def leer_excel(file):
+    df = pd.read_excel(file)
+    df.columns = df.columns.str.strip().str.upper()
+    # Agregamos la columna de Checkbox por defecto marcada como True
+    df.insert(0, 'SELECCIONAR', True) 
+    return df
 
-with col_control:
-    st.subheader("⚙️ Panel de Carga")
-    # Selector de control para organizar el flujo del usuario
-    dia_actual = st.selectbox("Seleccione el periodo/día a procesar:", [f"Día {i}" for i in range(1, 32)])
+col_panel, col_resumen = st.columns([1.5, 1])
+
+with col_panel:
+    st.subheader("⚙️ 1. Carga y Selección")
+    dia_actual = st.selectbox("¿Qué día estás procesando ahora mismo?", [f"Día {i}" for i in range(1, 32)])
     
     st.markdown("---")
-    file_cajas = st.file_uploader(f"📂 Archivo CAJAS ({dia_actual})", type=["xlsx", "xls"])
-    file_atc = st.file_uploader(f"📂 Archivo ATC ({dia_actual})", type=["xlsx", "xls"])
-    file_com = st.file_uploader(f"📂 Archivo COMUNICACIONES ({dia_actual})", type=["xlsx", "xls"])
+    file_cajas = st.file_uploader("📂 Archivo CAJAS", type=["xlsx", "xls"], key="cajas")
+    file_atc = st.file_uploader("📂 Archivo ATC", type=["xlsx", "xls"], key="atc")
+    file_com = st.file_uploader("📂 Archivo COMUNICACIONES", type=["xlsx", "xls"], key="com")
 
-    # Botón para inyectar los datos cargados a la memoria global
-    if st.button("📥 Confirmar y Añadir a Plantilla Global", use_container_width=True, type="secondary"):
-        if file_cajas and file_atc and file_com:
-            try:
-                # Lectura de flujos
-                df_cajas = pd.read_excel(file_cajas)
-                df_atc = pd.read_excel(file_atc)
-                df_com = pd.read_excel(file_com)
+    if file_cajas and file_atc and file_com:
+        st.write("### Revisa y selecciona las filas a incluir:")
+        
+        # Leemos los archivos
+        df_cajas_raw = leer_excel(file_cajas)
+        df_atc_raw = leer_excel(file_atc)
+        df_com_raw = leer_excel(file_com)
 
-                # Limpieza de columnas estándar
-                df_cajas.columns = df_cajas.columns.str.strip().str.upper()
-                df_atc.columns = df_atc.columns.str.strip().str.upper()
-                df_com.columns = df_com.columns.str.strip().str.upper()
+        # Mostramos los editores interactivos
+        st.write("**Cajas Diarias**")
+        edit_cajas = st.data_editor(df_cajas_raw, hide_index=True, use_container_width=True)
+        
+        st.write("**ATC Unificado**")
+        edit_atc = st.data_editor(df_atc_raw, hide_index=True, use_container_width=True)
+        
+        st.write("**Comunicaciones Internas**")
+        edit_com = st.data_editor(df_com_raw, hide_index=True, use_container_width=True)
 
-                # Control estricto de nulos en asignación
-                def limpiar_asig(df, col, respaldo):
-                    return df.get(col, df.get(respaldo, '')).fillna('').astype(str).replace('nan', '', regex=True)
+        if st.button(f"📥 Confirmar filas marcadas para el {dia_actual}", type="primary"):
+            # 1. Filtrar solo las filas que el usuario dejó marcadas (True)
+            df_cajas = edit_cajas[edit_cajas['SELECCIONAR'] == True].copy()
+            df_atc = edit_atc[edit_atc['SELECCIONAR'] == True].copy()
+            df_com = edit_com[edit_com['SELECCIONAR'] == True].copy()
 
-                df_cajas['ZUONR_FINAL'] = limpiar_asig(df_cajas, 'ASIGNACION', 'CÓDIGO ASIENTO')
-                df_atc['ZUONR_FINAL'] = limpiar_asig(df_atc, 'ASIGNACION', 'CÓDIGO ASIENTO')
-                df_com['ZUONR_FINAL'] = limpiar_asig(df_com, 'ASIGNACION', '')
+            # 2. Limpieza de Asignaciones
+            def limpiar_asig(df, col, respaldo):
+                if df.empty: return df
+                return df.get(col, df.get(respaldo, '')).fillna('').astype(str).replace('nan', '', regex=True)
 
-                # Conversión técnica de montos
-                def parse_monto(df, col):
-                    return df[col].astype(str).str.replace(',', '.').astype(float)
+            if not df_cajas.empty: df_cajas['ZUONR_FINAL'] = limpiar_asig(df_cajas, 'ASIGNACION', 'CÓDIGO ASIENTO')
+            if not df_atc.empty: df_atc['ZUONR_FINAL'] = limpiar_asig(df_atc, 'ASIGNACION', 'CÓDIGO ASIENTO')
+            if not df_com.empty: df_com['ZUONR_FINAL'] = limpiar_asig(df_com, 'ASIGNACION', '')
 
-                # Mapeos individuales a SAP
-                sap_cajas = pd.DataFrame({
-                    'BUKRS': 'BO01', 'HKONT': df_cajas['CUENTA CONTABLE'], 'SGTXT': df_cajas['GLOSA RECORTADA'],
-                    'WRSOL': parse_monto(df_cajas, 'CRÉDITOS'), 'WRHAB': '', 'PRCTR': '10010101',
-                    'VALUT': pd.to_datetime(df_cajas['FECHA']), 'ZUONR': df_cajas['ZUONR_FINAL']
-                })
+            # 3. Mapeo SAP
+            def parse_monto(df, col):
+                return df[col].astype(str).str.replace(',', '.').astype(float)
 
-                sap_atc = pd.DataFrame({
-                    'BUKRS': 'BO01', 'HKONT': df_atc['CUENTA CONTABLE'], 'SGTXT': df_atc['DETALLE'],
-                    'WRSOL': parse_monto(df_atc, 'MONTO'), 'WRHAB': '', 'PRCTR': '10010101',
-                    'VALUT': pd.to_datetime(df_atc['FECHA']), 'ZUONR': df_atc['ZUONR_FINAL']
-                })
+            sap_cajas = pd.DataFrame() if df_cajas.empty else pd.DataFrame({
+                'DIA_ETIQUETA': dia_actual, 'BUKRS': 'BO01', 'HKONT': df_cajas['CUENTA CONTABLE'], 'SGTXT': df_cajas['GLOSA RECORTADA'],
+                'WRSOL': parse_monto(df_cajas, 'CRÉDITOS'), 'WRHAB': '', 'PRCTR': '10010101',
+                'VALUT': pd.to_datetime(df_cajas['FECHA']), 'ZUONR': df_cajas['ZUONR_FINAL']
+            })
 
-                sap_com = pd.DataFrame({
-                    'BUKRS': 'BO01', 'HKONT': df_com['CUENTA CONTABLE BANCO'], 'SGTXT': df_com['GLOSA ASIENTO COMUNICACIONES INTERNAS'],
-                    'WRSOL': parse_monto(df_com, 'TOTAL C.I.'), 'WRHAB': '', 'PRCTR': '10010101',
-                    'VALUT': pd.to_datetime(df_com['FECHA']), 'ZUONR': df_com['ZUONR_FINAL']
-                })
+            sap_atc = pd.DataFrame() if df_atc.empty else pd.DataFrame({
+                'DIA_ETIQUETA': dia_actual, 'BUKRS': 'BO01', 'HKONT': df_atc['CUENTA CONTABLE'], 'SGTXT': df_atc['DETALLE'],
+                'WRSOL': parse_monto(df_atc, 'MONTO'), 'WRHAB': '', 'PRCTR': '10010101',
+                'VALUT': pd.to_datetime(df_atc['FECHA']), 'ZUONR': df_atc['ZUONR_FINAL']
+            })
 
-                # Unión del bloque actual
-                bloque_dia = pd.concat([sap_cajas, sap_atc, sap_com])
-                
-                # Rellenar las columnas faltantes del layout SAP
-                for col in st.session_state.plantilla_maestra.columns:
-                    if col not in bloque_dia.columns:
-                        bloque_dia[col] = ''
-                
-                bloque_dia = bloque_dia[st.session_state.plantilla_maestra.columns]
+            sap_com = pd.DataFrame() if df_com.empty else pd.DataFrame({
+                'DIA_ETIQUETA': dia_actual, 'BUKRS': 'BO01', 'HKONT': df_com['CUENTA CONTABLE BANCO'], 'SGTXT': df_com['GLOSA ASIENTO COMUNICACIONES INTERNAS'],
+                'WRSOL': parse_monto(df_com, 'TOTAL C.I.'), 'WRHAB': '', 'PRCTR': '10010101',
+                'VALUT': pd.to_datetime(df_com['FECHA']), 'ZUONR': df_com['ZUONR_FINAL']
+            })
 
-                # CONCATENACIÓN ACUMULATIVA: Se añade al estado global de la sesión
-                st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque_dia], ignore_index=True)
-                st.success(f"💥 ¡Datos de {dia_actual} acumulados con éxito!")
+            # Unir y guardar en memoria global
+            bloque_dia = pd.concat([sap_cajas, sap_atc, sap_com])
+            for col in st.session_state.plantilla_maestra.columns:
+                if col not in bloque_dia.columns:
+                    bloque_dia[col] = ''
             
-            except Exception as e:
-                st.error(f"Error procesando los archivos: {e}")
-        else:
-            st.warning("Por favor sube los 3 archivos requeridos antes de confirmar.")
+            st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque_dia], ignore_index=True)
+            st.success(f"✅ Filas guardadas correctamente bajo el {dia_actual}")
 
-    if st.button("🗑️ Reiniciar Toda la Plantilla", use_container_width=True):
-        st.session_state.plantilla_maestra = pd.DataFrame(columns=columnas_sap)
-        st.experimental_rerun()
-
-# 4. MONITOR DE ESTADO Y VISTA PREVIA GLOBAL
+# --- SECCIÓN DE EXPORTACIÓN (ARCHIVOS SEPARADOS) ---
 with col_resumen:
-    st.subheader("📈 Estado del Asiento Acumulado")
+    st.subheader("📦 2. Exportación por Días")
     
-    total_filas = len(st.session_state.plantilla_maestra)
-    
-    # KPI metrics en pantalla
-    st.metric(label="Total de Filas en el Debe Acumuladas", value=total_filas)
-    
-    st.markdown("---")
-    st.write("### Vista Previa de la Plantilla Global (Acumulada)")
-    
-    if total_filas > 0:
-        # Hacemos una copia para aplicar el formato visual solicitado sin alterar los datos numéricos internos
-        df_visual = st.session_state.plantilla_maestra.copy()
+    if len(st.session_state.plantilla_maestra) > 0:
+        # Obtenemos qué días han sido procesados
+        dias_procesados = st.session_state.plantilla_maestra['DIA_ETIQUETA'].unique()
         
-        # Aplicar formato de fecha DD/MM/YYYY
-        df_visual['VALUT'] = pd.to_datetime(df_visual['VALUT']).dt.strftime('%d/%m/%Y')
-        
-        # Aplicar formato de número europeo/boliviano: 1.000,12
-        def string_format_sap(val):
-            try:
-                return f"{float(val):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-            except:
-                return val
-                
-        df_visual['WRSOL'] = df_visual['WRSOL'].apply(string_format_sap)
-        
-        # Mostrar grilla interactiva
-        st.dataframe(df_visual, use_container_width=True)
-        
-        # 5. EXPORTACIÓN ÚNICA DEL CSV COMPLETO
-        st.markdown("### 📥 Fase Final de Carga Masiva")
-        csv_data = df_visual.to_csv(index=False, sep='|', header=True)
-        
-        st.download_button(
-            label="🚀 Exportar Plantilla Consolidada Completa a SAP (.csv)",
-            data=csv_data,
-            file_name="PLANTILLA_SAP_CONSOLIDADO_DIARIO.csv",
-            mime="text/csv",
-            use_container_width=True,
-            type="primary"
-        )
+        st.info(f"Tienes {len(dias_procesados)} días listos para exportar.")
+
+        for dia in dias_procesados:
+            # Filtramos la memoria para obtener solo el día actual del bucle
+            df_dia = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] == dia].copy()
+            
+            # Limpiamos la columna de control antes de exportar
+            df_export = df_dia.drop(columns=['DIA_ETIQUETA'])
+            
+            # Formatos SAP
+            df_export['VALUT'] = pd.to_datetime(df_export['VALUT']).dt.strftime('%d/%m/%Y')
+            def string_format_sap(val):
+                try: return f"{float(val):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+                except: return val
+            df_export['WRSOL'] = df_export['WRSOL'].apply(string_format_sap)
+            
+            # Generar CSV en memoria
+            csv_data = df_export.to_csv(index=False, sep='|', header=True)
+            
+            # Crear un botón de descarga ÚNICO para este día
+            st.download_button(
+                label=f"⬇️ Descargar SAP {dia}",
+                data=csv_data,
+                file_name=f"PLANTILLA_SAP_{dia.replace(' ', '_')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            
+        if st.button("🗑️ Limpiar Memoria Completa", type="secondary"):
+            st.session_state.plantilla_maestra = pd.DataFrame(columns=columnas_sap)
+            st.experimental_rerun()
     else:
-        st.info("La plantilla está vacía. Comienza a confirmar periodos en el panel izquierdo para ver la acumulación de datos contables.")
+        st.write("Aún no has confirmado ningún día. Los botones de descarga aparecerán aquí.")
