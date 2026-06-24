@@ -9,17 +9,18 @@ st.write("Sube tus archivos, selecciona las filas correspondientes al día actua
 
 # --- INICIALIZAR MEMORIA ---
 if 'plantilla_maestra' not in st.session_state:
-    # Agregamos una columna de control interna llamada 'DIA_ETIQUETA'
     columnas_sap = ['DIA_ETIQUETA', 'BUKRS', 'HKONT', 'SGTXT', 'WRSOL', 'WRHAB', 'DMBTR', 'DMBE2', 'MWSKZ', 'TXJCD', 'KOSTL', 'PRCTR', 'AUFNR', 'PS_POSID', 'VALUT', 'HBKID', 'HKTID', 'ZUONR', 'VBUND', 'FIPEX']
     st.session_state.plantilla_maestra = pd.DataFrame(columns=columnas_sap)
 
-# --- FUNCIÓN PARA CARGAR SIN RECARGAR LA PÁGINA ---
+# Control de estado para los botones de Seleccionar Todo
+if 'marcar_todo' not in st.session_state:
+    st.session_state.marcar_todo = True
+
+# --- FUNCIÓN PARA CARGAR LOS EXCELS ---
 @st.cache_data
 def leer_excel(file):
     df = pd.read_excel(file)
     df.columns = df.columns.str.strip().str.upper()
-    # Agregamos la columna de Checkbox por defecto marcada como True
-    df.insert(0, 'SELECCIONAR', True) 
     return df
 
 col_panel, col_resumen = st.columns([1.5, 1])
@@ -36,22 +37,39 @@ with col_panel:
     if file_cajas and file_atc and file_com:
         st.write("### Revisa y selecciona las filas a incluir:")
         
+        # --- BOTONES DE SELECCIÓN MASIVA ---
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("✅ Marcar Todas las Filas", use_container_width=True):
+                st.session_state.marcar_todo = True
+        with col_btn2:
+            if st.button("⬜ Desmarcar Todas las Filas", use_container_width=True):
+                st.session_state.marcar_todo = False
+        
         # Leemos los archivos
-        df_cajas_raw = leer_excel(file_cajas)
-        df_atc_raw = leer_excel(file_atc)
-        df_com_raw = leer_excel(file_com)
+        df_cajas_raw = leer_excel(file_cajas).copy()
+        df_atc_raw = leer_excel(file_atc).copy()
+        df_com_raw = leer_excel(file_com).copy()
+
+        # Insertamos la columna SELECCIONAR según el estado del botón
+        df_cajas_raw.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
+        df_atc_raw.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
+        df_com_raw.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
+
+        # Clave dinámica para que las tablas se refresquen al tocar los botones o cambiar de día
+        key_suffix = f"{dia_actual}_{st.session_state.marcar_todo}"
 
         # Mostramos los editores interactivos
         st.write("**Cajas Diarias**")
-        edit_cajas = st.data_editor(df_cajas_raw, hide_index=True, use_container_width=True)
+        edit_cajas = st.data_editor(df_cajas_raw, hide_index=True, use_container_width=True, key=f"edit_cajas_{key_suffix}")
         
         st.write("**ATC Unificado**")
-        edit_atc = st.data_editor(df_atc_raw, hide_index=True, use_container_width=True)
+        edit_atc = st.data_editor(df_atc_raw, hide_index=True, use_container_width=True, key=f"edit_atc_{key_suffix}")
         
         st.write("**Comunicaciones Internas**")
-        edit_com = st.data_editor(df_com_raw, hide_index=True, use_container_width=True)
+        edit_com = st.data_editor(df_com_raw, hide_index=True, use_container_width=True, key=f"edit_com_{key_suffix}")
 
-        if st.button(f"📥 Confirmar filas marcadas para el {dia_actual}", type="primary"):
+        if st.button(f"📥 Confirmar filas marcadas para el {dia_actual}", type="primary", use_container_width=True):
             # 1. Filtrar solo las filas que el usuario dejó marcadas (True)
             df_cajas = edit_cajas[edit_cajas['SELECCIONAR'] == True].copy()
             df_atc = edit_atc[edit_atc['SELECCIONAR'] == True].copy()
@@ -90,12 +108,16 @@ with col_panel:
 
             # Unir y guardar en memoria global
             bloque_dia = pd.concat([sap_cajas, sap_atc, sap_com])
-            for col in st.session_state.plantilla_maestra.columns:
-                if col not in bloque_dia.columns:
-                    bloque_dia[col] = ''
             
-            st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque_dia], ignore_index=True)
-            st.success(f"✅ Filas guardadas correctamente bajo el {dia_actual}")
+            if not bloque_dia.empty:
+                for col in st.session_state.plantilla_maestra.columns:
+                    if col not in bloque_dia.columns:
+                        bloque_dia[col] = ''
+                
+                st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque_dia], ignore_index=True)
+                st.success(f"✅ ¡{len(bloque_dia)} filas guardadas correctamente bajo el {dia_actual}!")
+            else:
+                st.warning("⚠️ No seleccionaste ninguna fila para guardar.")
 
 # --- SECCIÓN DE EXPORTACIÓN (ARCHIVOS SEPARADOS) ---
 with col_resumen:
@@ -133,8 +155,9 @@ with col_resumen:
                 use_container_width=True
             )
             
-        if st.button("🗑️ Limpiar Memoria Completa", type="secondary"):
+        st.markdown("---")
+        if st.button("🗑️ Limpiar Memoria Completa", type="secondary", use_container_width=True):
             st.session_state.plantilla_maestra = pd.DataFrame(columns=columnas_sap)
-            st.experimental_rerun()
+            st.rerun() # Reinicia la página
     else:
-        st.write("Aún no has confirmado ningún día. Los botones de descarga aparecerán aquí.")
+        st.write("Aún no has confirmado ningún día. Los botones de descarga aparecerán aquí a medida que confirmes la selección.")
