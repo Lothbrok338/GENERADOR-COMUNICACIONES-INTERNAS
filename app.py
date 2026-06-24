@@ -25,12 +25,13 @@ mapa_cuentas = {
 uploaded_file = st.file_uploader("Cargar reporte original", type=["csv", "xls", "xlsx"])
 
 if uploaded_file:
-    # 1. Carga inteligente
     try:
+        # 1. Carga inteligente
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, skiprows=10)
         else:
-            df = pd.read_excel(uploaded_file, skiprows=10)
+            # Se especifica engine='openpyxl' para archivos Excel modernos
+            df = pd.read_excel(uploaded_file, skiprows=10, engine='openpyxl')
         
         # 2. Filtro inicial de Válidos
         df = df[df['Estado'] == 'Válido'].copy()
@@ -44,7 +45,7 @@ if uploaded_file:
         df['Cuenta'] = ""
         df['Asignacion'] = ""
 
-        st.write("Edita la tabla para asignar Facturación y Banco. Puedes seleccionar y arrastrar valores:")
+        st.write("Edita la tabla para asignar Facturación y Banco:")
         
         # 4. Editor interactivo
         edited_df = st.data_editor(
@@ -58,12 +59,18 @@ if uploaded_file:
 
         if st.button("Generar Procesamiento Final"):
             # Lógica: Clínica y Total CI
+            # Si es Reserva Int., Clínica = 2400.0, sino se mantiene como estaba o 0.
             edited_df.loc[edited_df['Facturacion'] == 'Reserva Int.', 'Clinica'] = 2400.0
+            
+            # Aseguramos que Monto y Clinica sean numéricos para la suma
+            edited_df['Monto'] = pd.to_numeric(edited_df['Monto'], errors='coerce').fillna(0)
+            edited_df['Clinica'] = pd.to_numeric(edited_df['Clinica'], errors='coerce').fillna(0)
             edited_df['Total C.I.'] = edited_df['Monto'] + edited_df['Clinica']
             
             # Lógica: Glosa (FAC + Numero + Nombre + Tipo, truncado a 43)
+            # Manejo de nulos en Facturacion para no romper la glosa
             edited_df['Glosa Asiento'] = edited_df.apply(
-                lambda x: f"FAC {x['Número Factura']} {x['Nombre Estudiante']} {x['Facturacion']}"[:43], axis=1
+                lambda x: f"FAC {x['Número Factura']} {x['Nombre Estudiante']} {str(x['Facturacion'] or '')}"[:43], axis=1
             )
             
             # Lógica: Cuenta
