@@ -1,13 +1,10 @@
 import streamlit as st
 import pandas as pd
-import io
 
-# Configuración de página
 st.set_page_config(page_title="Sistema Facturación Univalle", layout="wide")
-
 st.title("📄 Sistema de Facturación Univalle")
 
-# Definición de listas
+# Listas
 opciones_facturacion = ["Posgrado", "Pregrado", "Reserva Int."]
 opciones_banco = [
     "BNB MN", "BNB CLINICA", "BISA MN", "BCP MN", "BUSA MN", "BANECO", 
@@ -27,22 +24,21 @@ uploaded_file = st.file_uploader("Cargar reporte original", type=["csv", "xls", 
 
 if uploaded_file:
     try:
-        # 1. Carga robusta
+        # Carga forzando el motor lxml para HTML/Excel
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, skiprows=10)
         else:
+            # Intentar lectura normal de Excel
             try:
                 df = pd.read_excel(uploaded_file, skiprows=10, engine='openpyxl')
             except:
-                # Si falla, intentamos leerlo como tabla HTML (por si es un Excel "falso")
-                uploaded_file.seek(0)
-                df = pd.read_html(uploaded_file, skiprows=10)[0]
+                # Fallback a tabla HTML usando lxml explícitamente
+                df = pd.read_html(uploaded_file, skiprows=10, flavor='lxml')[0]
         
-        # 2. Limpieza y Filtro
-        df = df.dropna(how='all') # Elimina filas totalmente vacías
+        df = df.dropna(how='all')
         df = df[df['Estado'] == 'Válido'].copy()
         
-        # 3. Preparación de columnas
+        # Columnas iniciales
         df['Facturacion'] = None
         df['Clinica'] = 0.0
         df['Total C.I.'] = df['Monto']
@@ -51,9 +47,6 @@ if uploaded_file:
         df['Cuenta'] = ""
         df['Asignacion'] = ""
 
-        st.write("Edita la tabla para asignar Facturación y Banco:")
-        
-        # 4. Editor interactivo
         edited_df = st.data_editor(
             df,
             column_config={
@@ -64,29 +57,17 @@ if uploaded_file:
         )
 
         if st.button("Generar Procesamiento Final"):
-            # Lógica: Clínica y Total CI
             edited_df.loc[edited_df['Facturacion'] == 'Reserva Int.', 'Clinica'] = 2400.0
-            
-            # Asegurar numéricos
             edited_df['Monto'] = pd.to_numeric(edited_df['Monto'], errors='coerce').fillna(0)
-            edited_df['Clinica'] = pd.to_numeric(edited_df['Clinica'], errors='coerce').fillna(0)
             edited_df['Total C.I.'] = edited_df['Monto'] + edited_df['Clinica']
-            
-            # Lógica: Glosa
             edited_df['Glosa Asiento'] = edited_df.apply(
                 lambda x: f"FAC {x['Número Factura']} {x['Nombre Estudiante']} {str(x['Facturacion'] or '')}"[:43], axis=1
             )
-            
-            # Lógica: Cuenta
             edited_df['Cuenta'] = edited_df['Banco'].map(mapa_cuentas)
             
-            # Resultado
             st.success("Reporte procesado exitosamente")
             st.dataframe(edited_df)
-            
-            # Descarga
             csv = edited_df.to_csv(index=False).encode('utf-8')
             st.download_button("Descargar Excel Final", csv, "reporte_final_univalle.csv", "text/csv")
-
     except Exception as e:
-        st.error(f"Error al procesar el archivo: {e}")
+        st.error(f"Error crítico: {e}. Asegúrate de que el archivo no esté vacío.")
