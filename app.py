@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import io
 
 # Configuración de página
 st.set_page_config(page_title="Sistema Facturación Univalle", layout="wide")
@@ -26,17 +27,22 @@ uploaded_file = st.file_uploader("Cargar reporte original", type=["csv", "xls", 
 
 if uploaded_file:
     try:
-        # 1. Carga inteligente
+        # 1. Carga robusta
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, skiprows=10)
         else:
-            # Se especifica engine='openpyxl' para archivos Excel modernos
-            df = pd.read_excel(uploaded_file, skiprows=10, engine='openpyxl')
+            try:
+                df = pd.read_excel(uploaded_file, skiprows=10, engine='openpyxl')
+            except:
+                # Si falla, intentamos leerlo como tabla HTML (por si es un Excel "falso")
+                uploaded_file.seek(0)
+                df = pd.read_html(uploaded_file, skiprows=10)[0]
         
-        # 2. Filtro inicial de Válidos
+        # 2. Limpieza y Filtro
+        df = df.dropna(how='all') # Elimina filas totalmente vacías
         df = df[df['Estado'] == 'Válido'].copy()
         
-        # 3. Preparación de columnas para el editor
+        # 3. Preparación de columnas
         df['Facturacion'] = None
         df['Clinica'] = 0.0
         df['Total C.I.'] = df['Monto']
@@ -59,16 +65,14 @@ if uploaded_file:
 
         if st.button("Generar Procesamiento Final"):
             # Lógica: Clínica y Total CI
-            # Si es Reserva Int., Clínica = 2400.0, sino se mantiene como estaba o 0.
             edited_df.loc[edited_df['Facturacion'] == 'Reserva Int.', 'Clinica'] = 2400.0
             
-            # Aseguramos que Monto y Clinica sean numéricos para la suma
+            # Asegurar numéricos
             edited_df['Monto'] = pd.to_numeric(edited_df['Monto'], errors='coerce').fillna(0)
             edited_df['Clinica'] = pd.to_numeric(edited_df['Clinica'], errors='coerce').fillna(0)
             edited_df['Total C.I.'] = edited_df['Monto'] + edited_df['Clinica']
             
-            # Lógica: Glosa (FAC + Numero + Nombre + Tipo, truncado a 43)
-            # Manejo de nulos en Facturacion para no romper la glosa
+            # Lógica: Glosa
             edited_df['Glosa Asiento'] = edited_df.apply(
                 lambda x: f"FAC {x['Número Factura']} {x['Nombre Estudiante']} {str(x['Facturacion'] or '')}"[:43], axis=1
             )
@@ -76,7 +80,7 @@ if uploaded_file:
             # Lógica: Cuenta
             edited_df['Cuenta'] = edited_df['Banco'].map(mapa_cuentas)
             
-            # Resultado final
+            # Resultado
             st.success("Reporte procesado exitosamente")
             st.dataframe(edited_df)
             
