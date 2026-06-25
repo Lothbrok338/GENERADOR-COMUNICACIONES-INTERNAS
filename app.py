@@ -28,7 +28,7 @@ for key in ['name_cajas', 'name_atc', 'name_com']:
     if key not in st.session_state:
         st.session_state[key] = []
 
-# --- FUNCIÓN DE INGESTA MULTIPLE Y EXTRACCIÓN DE METADATOS ---
+# --- FUNCIÓN DE INGESTA MULTIPLE Y EXTRACCIÓN DE PESTAÑAS ---
 def procesar_subida_multiple(lista_archivos, state_name, state_df, tipo_archivo):
     # Obtenemos los nombres actuales de los archivos subidos
     nombres_actuales = [f.name for f in lista_archivos] if lista_archivos else []
@@ -38,28 +38,44 @@ def procesar_subida_multiple(lista_archivos, state_name, state_df, tipo_archivo)
         if lista_archivos:
             dfs_temporales = []
             for file_obj in lista_archivos:
-                df = pd.read_excel(file_obj)
-                df.columns = df.columns.str.strip().str.upper()
                 
-                # Guardamos el nombre del archivo limpio para usarlo como filtro dinámico
-                nombre_limpio = file_obj.name.split('.')[0].upper().replace('_', ' ')
-                df['FUENTE_ARCHIVO'] = nombre_limpio
-                
-                # Extracción automática de código de caja desde el nombre del archivo para ATC
-                if tipo_archivo == 'ATC':
-                    tiene_caja = any('CAJA' in col for col in df.columns)
-                    if not tiene_caja:
-                        match = re.search(r'(SFC\d+|SOUVENIRS?)', file_obj.name.upper())
-                        df['NÚMERO DE CAJA'] = match.group(1) if match else 'GENERAL'
-                
-                dfs_temporales.append(df)
+                # --- NUEVA MAGIA PARA COMUNICACIONES (MÚLTIPLES PESTAÑAS) ---
+                if tipo_archivo == 'COMUN':
+                    # sheet_name=None obliga a Pandas a leer TODAS las pestañas a la vez
+                    diccionario_hojas = pd.read_excel(file_obj, sheet_name=None)
+                    
+                    for nombre_pestaña, df in diccionario_hojas.items():
+                        if not df.empty: # Ignora pestañas en blanco
+                            df.columns = df.columns.str.strip().str.upper()
+                            # Etiqueta visual para el filtro (Ej: si la pestaña se llama "1", dirá "DÍA 1")
+                            df['FUENTE_ARCHIVO'] = f"PESTAÑA DÍA {nombre_pestaña}"
+                            dfs_temporales.append(df)
+                            
+                # --- LÓGICA NORMAL PARA CAJAS Y ATC ---
+                else:
+                    df = pd.read_excel(file_obj)
+                    df.columns = df.columns.str.strip().str.upper()
+                    
+                    nombre_limpio = file_obj.name.split('.')[0].upper().replace('_', ' ')
+                    df['FUENTE_ARCHIVO'] = nombre_limpio
+                    
+                    # Extracción automática de código de caja desde el nombre del archivo para ATC
+                    if tipo_archivo == 'ATC':
+                        tiene_caja = any('CAJA' in col for col in df.columns)
+                        if not tiene_caja:
+                            match = re.search(r'(SFC\d+|SOUVENIRS?)', file_obj.name.upper())
+                            df['NÚMERO DE CAJA'] = match.group(1) if match else 'GENERAL'
+                    
+                    dfs_temporales.append(df)
             
-            # Unimos todos los archivos de esta categoría en una sola tabla gigante
-            df_consolidado = pd.concat(dfs_temporales, ignore_index=True)
-            df_consolidado['PROCESADO'] = False 
-            df_consolidado['ORIGINAL_INDEX'] = df_consolidado.index 
-            
-            st.session_state[state_df] = df_consolidado
+            # Unimos todos los archivos y pestañas en una sola tabla gigante
+            if dfs_temporales:
+                df_consolidado = pd.concat(dfs_temporales, ignore_index=True)
+                df_consolidado['PROCESADO'] = False 
+                df_consolidado['ORIGINAL_INDEX'] = df_consolidado.index 
+                st.session_state[state_df] = df_consolidado
+            else:
+                st.session_state[state_df] = pd.DataFrame()
         else:
             # Si quitaron todos los archivos, vaciamos el dataframe
             st.session_state[state_df] = pd.DataFrame()
@@ -70,10 +86,10 @@ def procesar_subida_multiple(lista_archivos, state_name, state_df, tipo_archivo)
 with st.sidebar:
     st.header("⚙️ Módulo de Ingesta")
     st.write("*(Puede seleccionar varios archivos a la vez)*")
-    # ACTIVAMOS CARGA MÚLTIPLE
+    
     file_cajas = st.file_uploader("📂 Cargar extracto CAJAS", type=["xlsx", "xls"], accept_multiple_files=True)
     file_atc = st.file_uploader("📂 Cargar extracto ATC", type=["xlsx", "xls"], accept_multiple_files=True)
-    file_com = st.file_uploader("📂 Cargar extracto COMUNICACIONES", type=["xlsx", "xls"], accept_multiple_files=True)
+    file_com = st.file_uploader("📂 Libro Maestro COMUNICACIONES", type=["xlsx", "xls"], accept_multiple_files=True)
 
     # Procesar subidas identificando el tipo de flujo
     procesar_subida_multiple(file_cajas, 'name_cajas', 'df_cajas', 'CAJAS')
@@ -117,7 +133,6 @@ with st.sidebar:
         st.rerun()
 
 # --- ÁREA PRINCIPAL (PANTALLA COMPLETA) ---
-# AHORA USAMOS 'OR' PARA PERMITIR TRABAJAR AUNQUE FALTE ALGÚN ARCHIVO (EJ. Días sin Comunicaciones)
 if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or not st.session_state.df_com.empty:
     
     # Controles superiores de asignación de periodo
@@ -165,12 +180,12 @@ if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or n
             with col_filtro_caja:
                 caja_filtrada = st.selectbox("🛒 Filtrar Cajas y ATC por Código de Cajero:", opciones_caja, key="filtro_caja_master")
 
-    # 2. Identificar Archivos de Comunicaciones cargados
+    # 2. Identificar Pestañas de Comunicaciones cargadas
     com_filtrada = "Mostrar Todas"
     if not df_pendientes_com.empty and 'FUENTE_ARCHIVO' in df_pendientes_com.columns:
         opciones_com = ["Mostrar Todas"] + sorted(list(df_pendientes_com['FUENTE_ARCHIVO'].unique()))
         with col_filtro_com:
-            com_filtrada = st.selectbox("📑 Filtrar Comunicaciones Internas por Documento:", opciones_com, key="filtro_com_master")
+            com_filtrada = st.selectbox("📑 Filtrar Comunicaciones Internas por Pestaña:", opciones_com, key="filtro_com_master")
 
     # --- APLICACIÓN EN TIEMPO REAL DE LOS FILTROS ---
     if caja_filtrada != "Mostrar Todas":
