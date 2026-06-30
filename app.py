@@ -133,7 +133,11 @@ with st.sidebar:
 if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or not st.session_state.df_com.empty:
     col_dia, col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 1, 1])
     with col_dia: 
-        # Modificación para auto-avanzar mediante key="dia_seleccionado"
+        # Modificación para evitar StreamlitAPIException al avanzar el día
+        if 'temp_next_day' in st.session_state:
+            st.session_state.dia_seleccionado = st.session_state.temp_next_day
+            del st.session_state.temp_next_day
+            
         dia_actual = st.selectbox("📅 Asignar transacciones al periodo:", [f"Día {i}" for i in range(1, 32)], key='dia_seleccionado')
     with col_btn1: 
         if st.button("✅ Marcar Todo", use_container_width=True): 
@@ -214,10 +218,10 @@ if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or n
             
             st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque], ignore_index=True)
             
-            # Modificación: Auto-Avanzar el día luego de anexar con éxito
+            # Modificación: En lugar de asignar directo al widget en esta misma carga, lo delegamos
             current_day_num = int(dia_actual.replace("Día ", ""))
-            next_day_num = min(current_day_num + 1, 31) # Avanza máximo hasta el Día 31
-            st.session_state.dia_seleccionado = f"Día {next_day_num}"
+            next_day_num = min(current_day_num + 1, 31)
+            st.session_state.temp_next_day = f"Día {next_day_num}"
             
             st.success("🎉 ¡Conciliación exitosa!")
             st.rerun()
