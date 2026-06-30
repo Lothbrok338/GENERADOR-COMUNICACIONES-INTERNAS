@@ -88,18 +88,36 @@ with st.sidebar:
 
         # --- BOTÓN DE EXPORTACIÓN CONSOLIDADA TOTAL ---
         df_total = st.session_state.plantilla_maestra.copy()
-        # Ordenamos inteligentemente por número de día para que el "Día 10" no salga antes del "Día 2"
         df_total['num_dia'] = df_total['DIA_ETIQUETA'].str.replace('Día ', '').astype(int)
-        df_total = df_total.sort_values('num_dia').drop(columns=['num_dia'])
         
-        df_export_total = df_total.drop(columns=['DIA_ETIQUETA'])
-        df_export_total['VALUT'] = pd.to_datetime(df_export_total['VALUT']).dt.strftime('%d/%m/%Y')
-        df_export_total['WRSOL'] = df_export_total['WRSOL'].apply(format_num)
-        csv_total = df_export_total.to_csv(index=False, sep='|', header=True)
+        # Ordenamos y separamos por bloques
+        dias_ordenados_totales = sorted(df_total['num_dia'].unique())
+        
+        csv_blocks = []
+        for idx, n_dia in enumerate(dias_ordenados_totales):
+            dia_str = f"Día {n_dia}"
+            df_dia_bloque = df_total[df_total['DIA_ETIQUETA'] == dia_str].copy()
+            df_export_bloque = df_dia_bloque.drop(columns=['DIA_ETIQUETA', 'num_dia'])
+            
+            df_export_bloque['VALUT'] = pd.to_datetime(df_export_bloque['VALUT']).dt.strftime('%d/%m/%Y')
+            df_export_bloque['WRSOL'] = df_export_bloque['WRSOL'].apply(format_num)
+            
+            # Generar CSV de este bloque de día individual (Incluyendo encabezado)
+            csv_str = df_export_bloque.to_csv(index=False, sep='|', header=True)
+            
+            # Si no es el primer bloque insertamos las 3 filas vacías con la estructura correcta
+            if idx > 0:
+                # 19 columnas requieren 18 separadores '|' para mantener la tabla intacta en Excel
+                fila_vacia = "|" * (len(df_export_bloque.columns) - 1) + "\n"
+                csv_blocks.append(fila_vacia * 3)
+                
+            csv_blocks.append(csv_str)
+            
+        csv_total_estructurado = "".join(csv_blocks)
         
         st.download_button(
             label="📦 Descargar Consolidado Total", 
-            data=csv_total, 
+            data=csv_total_estructurado, 
             file_name="SAP_CONSOLIDADO_COMPLETO.csv", 
             mime="text/csv", 
             use_container_width=True,
