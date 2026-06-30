@@ -18,8 +18,8 @@ if 'plantilla_maestra' not in st.session_state:
 if 'marcar_todo' not in st.session_state:
     st.session_state.marcar_todo = True
 
-if 'marcar_todo_com' not in st.session_state:
-    st.session_state.marcar_todo_com = True
+if 'dia_seleccionado' not in st.session_state:
+    st.session_state.dia_seleccionado = "Día 1"
 
 for key in ['df_cajas', 'df_atc', 'df_com']:
     if key not in st.session_state:
@@ -82,20 +82,43 @@ with st.sidebar:
         dias_procesados = st.session_state.plantilla_maestra['DIA_ETIQUETA'].unique()
         st.success(f"📊 {len(dias_procesados)} periodos listos:")
         
-        for dia in sorted(dias_procesados):
+        def format_num(val):
+            try: return f"{float(val):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+            except: return val
+
+        # --- BOTÓN DE EXPORTACIÓN CONSOLIDADA TOTAL ---
+        df_total = st.session_state.plantilla_maestra.copy()
+        # Ordenamos inteligentemente por número de día para que el "Día 10" no salga antes del "Día 2"
+        df_total['num_dia'] = df_total['DIA_ETIQUETA'].str.replace('Día ', '').astype(int)
+        df_total = df_total.sort_values('num_dia').drop(columns=['num_dia'])
+        
+        df_export_total = df_total.drop(columns=['DIA_ETIQUETA'])
+        df_export_total['VALUT'] = pd.to_datetime(df_export_total['VALUT']).dt.strftime('%d/%m/%Y')
+        df_export_total['WRSOL'] = df_export_total['WRSOL'].apply(format_num)
+        csv_total = df_export_total.to_csv(index=False, sep='|', header=True)
+        
+        st.download_button(
+            label="📦 Descargar Consolidado Total", 
+            data=csv_total, 
+            file_name="SAP_CONSOLIDADO_COMPLETO.csv", 
+            mime="text/csv", 
+            use_container_width=True,
+            type="primary"
+        )
+        
+        st.markdown("---")
+        st.write("⬇️ O descargar por día individual:")
+
+        for dia in sorted(dias_procesados, key=lambda x: int(x.replace('Día ', ''))):
             df_dia = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] == dia].copy()
             df_export = df_dia.drop(columns=['DIA_ETIQUETA'])
             df_export['VALUT'] = pd.to_datetime(df_export['VALUT']).dt.strftime('%d/%m/%Y')
-            def format_num(val):
-                try: return f"{float(val):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-                except: return val
             df_export['WRSOL'] = df_export['WRSOL'].apply(format_num)
             csv = df_export.to_csv(index=False, sep='|', header=True)
             
-            # --- MODIFICACIÓN: BOTÓN DE EXPORTAR Y BOTÓN "X" PARA ELIMINAR ---
             col_d1, col_d2 = st.columns([4, 1])
             with col_d1:
-                st.download_button(f"⬇️ Descargar {dia}", csv, f"SAP_{dia.replace(' ', '_')}.csv", mime="text/csv", use_container_width=True)
+                st.download_button(f"📄 Descargar {dia}", csv, f"SAP_{dia.replace(' ', '_')}.csv", mime="text/csv", use_container_width=True)
             with col_d2:
                 if st.button("❌", key=f"del_{dia}", help=f"Descartar y borrar el {dia}"):
                     st.session_state.plantilla_maestra = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] != dia]
@@ -108,19 +131,17 @@ with st.sidebar:
 
 # --- ÁREA PRINCIPAL ---
 if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or not st.session_state.df_com.empty:
-    # --- MODIFICACIÓN: AÑADIDO BOTÓN EXCLUSIVO DE COMUNICACIONES ---
     col_dia, col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 1, 1])
     with col_dia: 
-        dia_actual = st.selectbox("📅 Asignar transacciones al periodo:", [f"Día {i}" for i in range(1, 32)])
+        # Modificación para auto-avanzar mediante key="dia_seleccionado"
+        dia_actual = st.selectbox("📅 Asignar transacciones al periodo:", [f"Día {i}" for i in range(1, 32)], key='dia_seleccionado')
     with col_btn1: 
         if st.button("✅ Marcar Todo", use_container_width=True): 
             st.session_state.marcar_todo = True
-            st.session_state.marcar_todo_com = True
             st.rerun()
     with col_btn2: 
         if st.button("⬜ Desmarcar Todo", use_container_width=True): 
             st.session_state.marcar_todo = False
-            st.session_state.marcar_todo_com = False
             st.rerun()
     with col_btn3:
         if st.button("📑 Todo Com.", help="Marcar solo filas de Comunicaciones", use_container_width=True): 
@@ -142,7 +163,6 @@ if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or n
         if 'NÚMERO DE CAJA' in df_pen_atc.columns: cajas.update(df_pen_atc['NÚMERO DE CAJA'].dropna().astype(str))
         caja_filtrada = col_filtro_caja.selectbox("🛒 Filtrar Cajas/ATC:", ["Mostrar Todas"] + sorted(list(cajas)))
 
-    # --- MODIFICACIÓN: ORDEN NATURAL PARA LAS PESTAÑAS ---
     com_filtrada = "Mostrar Todas"
     if 'FUENTE_ARCHIVO' in df_pen_com.columns:
         def natural_sort_key(s):
@@ -155,15 +175,14 @@ if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or n
         if not df_pen_atc.empty and 'NÚMERO DE CAJA' in df_pen_atc.columns: df_pen_atc = df_pen_atc[df_pen_atc['NÚMERO DE CAJA'].astype(str) == caja_filtrada]
     if com_filtrada != "Mostrar Todas" and not df_pen_com.empty: df_pen_com = df_pen_com[df_pen_com['FUENTE_ARCHIVO'] == com_filtrada]
 
-    # --- APLICAMOS ESTADO INDIVIDUAL PARA COMUNICACIONES ---
     if not df_pen_cajas.empty: df_pen_cajas.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
     if not df_pen_atc.empty: df_pen_atc.insert(0, 'SELECCIONAR', st.session_state.marcar_todo)
-    if not df_pen_com.empty: df_pen_com.insert(0, 'SELECCIONAR', st.session_state.marcar_todo_com)
+    if not df_pen_com.empty: df_pen_com.insert(0, 'SELECCIONAR', st.session_state.get('marcar_todo_com', st.session_state.marcar_todo))
 
     for df in [df_pen_cajas, df_pen_atc, df_pen_com]: 
         if not df.empty and 'FECHA' in df.columns: df['FECHA'] = pd.to_datetime(df['FECHA']).dt.strftime('%d/%m/%Y')
 
-    key_suffix = f"{dia_actual}_{st.session_state.marcar_todo}_{st.session_state.marcar_todo_com}_{caja_filtrada}_{com_filtrada}"
+    key_suffix = f"{dia_actual}_{st.session_state.marcar_todo}_{caja_filtrada}_{com_filtrada}"
     
     st.subheader(f"🛒 Cajas ({len(df_pen_cajas)}) | 💳 ATC ({len(df_pen_atc)}) | 📑 Com. ({len(df_pen_com)})")
     if not df_pen_cajas.empty: edit_cajas = st.data_editor(df_pen_cajas, hide_index=True, use_container_width=True, height=300, key=f"ed_c_{key_suffix}")
@@ -192,7 +211,15 @@ if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or n
             bloque = pd.concat([s_c, s_a, s_co])
             for col in st.session_state.plantilla_maestra.columns:
                 if col not in bloque.columns: bloque[col] = ''
+            
             st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque], ignore_index=True)
-            st.success("🎉 ¡Conciliación exitosa!"); st.rerun()
+            
+            # Modificación: Auto-Avanzar el día luego de anexar con éxito
+            current_day_num = int(dia_actual.replace("Día ", ""))
+            next_day_num = min(current_day_num + 1, 31) # Avanza máximo hasta el Día 31
+            st.session_state.dia_seleccionado = f"Día {next_day_num}"
+            
+            st.success("🎉 ¡Conciliación exitosa!")
+            st.rerun()
 else:
     st.info("Carga archivos para iniciar.")
