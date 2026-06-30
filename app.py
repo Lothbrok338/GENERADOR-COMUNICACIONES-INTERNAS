@@ -58,6 +58,7 @@ def procesar_subida_multiple(lista_archivos, state_name, state_df, tipo_archivo)
             if dfs_temporales:
                 df_consolidado = pd.concat(dfs_temporales, ignore_index=True)
                 df_consolidado['PROCESADO'] = False 
+                df_consolidado['DIA_ASIGNADO'] = "" # NUEVA COLUMNA PARA RASTREO
                 df_consolidado['ORIGINAL_INDEX'] = df_consolidado.index 
                 st.session_state[state_df] = df_consolidado
             else:
@@ -68,14 +69,12 @@ def procesar_subida_multiple(lista_archivos, state_name, state_df, tipo_archivo)
 
 # --- FUNCIONES DE FORMATO EXCEL ---
 def aplicar_formato_excel(writer, df, sheet_name="SAP"):
-    # Obtener el workbook y el worksheet de xlsxwriter
     workbook = writer.book
     worksheet = writer.sheets[sheet_name]
 
-    # Definir formatos
     formato_encabezado = workbook.add_format({
         'bold': True,
-        'bg_color': '#D9E1F2',  # Azul claro
+        'bg_color': '#D9E1F2',
         'border': 1,
         'align': 'center',
         'valign': 'vcenter'
@@ -89,40 +88,30 @@ def aplicar_formato_excel(writer, df, sheet_name="SAP"):
     formato_numero = workbook.add_format({
         'border': 1,
         'valign': 'vcenter',
-        'num_format': '#,##0.00'  # Formato numérico estándar de Excel
+        'num_format': '#,##0.00'
     })
 
-    # Escribir encabezados
     for col_num, value in enumerate(df.columns):
         worksheet.write(0, col_num, value, formato_encabezado)
 
-    # Escribir datos
     for row_num in range(len(df)):
         for col_num in range(len(df.columns)):
             valor = df.iloc[row_num, col_num]
-            # Aplicar formato de número a la columna WRSOL (índice 3, ya que DIA_ETIQUETA se elimina antes)
             if col_num == 3 and pd.notnull(valor):
                  worksheet.write(row_num + 1, col_num, valor, formato_numero)
             else:
-                 # Reemplazar NaN con string vacío para Excel
                  val_str = "" if pd.isna(valor) else valor
                  worksheet.write(row_num + 1, col_num, val_str, formato_celda)
 
-    # Ajustar anchos de columna
-    # Columnas con datos: BUKRS(0), HKONT(1), SGTXT(2), WRSOL(3)
-    worksheet.set_column(0, 0, 8)   # BUKRS
-    worksheet.set_column(1, 1, 12)  # HKONT
-    worksheet.set_column(2, 2, 40)  # SGTXT (Glosa)
-    worksheet.set_column(3, 3, 15)  # WRSOL (Monto)
-    
-    # Columnas E a M (índices 4 a 12): WRHAB, DMBTR, DMBE2, MWSKZ, TXJCD, KOSTL, PRCTR, AUFNR, PS_POSID
-    worksheet.set_column(4, 12, 3)  # Muy angostas
-    
-    # Resto de columnas
-    worksheet.set_column(13, 13, 12) # VALUT (Fecha)
-    worksheet.set_column(14, 15, 3)  # HBKID, HKTID angostas
-    worksheet.set_column(16, 16, 20) # ZUONR (Asignación)
-    worksheet.set_column(17, 18, 3)  # VBUND, FIPEX angostas
+    worksheet.set_column(0, 0, 8)   
+    worksheet.set_column(1, 1, 12)  
+    worksheet.set_column(2, 2, 40)  
+    worksheet.set_column(3, 3, 15)  
+    worksheet.set_column(4, 12, 3)  
+    worksheet.set_column(13, 13, 12) 
+    worksheet.set_column(14, 15, 3)  
+    worksheet.set_column(16, 16, 20) 
+    worksheet.set_column(17, 18, 3)  
 
 
 # --- PANEL LATERAL ---
@@ -141,52 +130,40 @@ with st.sidebar:
         dias_procesados = st.session_state.plantilla_maestra['DIA_ETIQUETA'].unique()
         st.success(f"📊 {len(dias_procesados)} periodos listos:")
         
-        # --- BOTÓN DE EXPORTACIÓN CONSOLIDADA TOTAL ---
+        def format_num(val):
+            try: return f"{float(val):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+            except: return val
+
         df_total = st.session_state.plantilla_maestra.copy()
         df_total['num_dia'] = df_total['DIA_ETIQUETA'].str.replace('Día ', '').astype(int)
         
-        # Ordenamos y separamos por bloques
         dias_ordenados_totales = sorted(df_total['num_dia'].unique())
         
-        # Crear un buffer de Excel en memoria
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            
-            # Preparar un DataFrame consolidado con filas en blanco
             dfs_a_concatenar = []
-            
-            # Fila vacía para los separadores
             fila_vacia = pd.DataFrame([[""] * (len(df_total.columns) - 2)], columns=df_total.drop(columns=['DIA_ETIQUETA', 'num_dia']).columns)
             
             for idx, n_dia in enumerate(dias_ordenados_totales):
                 dia_str = f"Día {n_dia}"
                 df_dia_bloque = df_total[df_total['DIA_ETIQUETA'] == dia_str].copy()
                 df_export_bloque = df_dia_bloque.drop(columns=['DIA_ETIQUETA', 'num_dia'])
-                
                 df_export_bloque['VALUT'] = pd.to_datetime(df_export_bloque['VALUT']).dt.strftime('%d/%m/%Y')
-                
-                # Convertir WRSOL a numérico para que Excel lo formatee bien
                 df_export_bloque['WRSOL'] = pd.to_numeric(df_export_bloque['WRSOL'], errors='coerce')
                 
-                # Si no es el primer bloque, insertar filas separadoras e intentar recrear el encabezado
                 if idx > 0:
                     dfs_a_concatenar.extend([fila_vacia, fila_vacia, fila_vacia])
-                    # Insertar una fila que funcione como encabezado visual
                     df_header = pd.DataFrame([df_export_bloque.columns], columns=df_export_bloque.columns)
                     dfs_a_concatenar.append(df_header)
                     
                 dfs_a_concatenar.append(df_export_bloque)
 
             df_final_excel = pd.concat(dfs_a_concatenar, ignore_index=True)
-            
-            # Escribir al Excel
             df_final_excel.to_excel(writer, sheet_name='SAP', index=False)
             
-            # Obtener workbook y worksheet
             workbook = writer.book
             worksheet = writer.sheets['SAP']
 
-            # Formato de celdas y numérico
             formato_celda = workbook.add_format({'valign': 'vcenter'})
             formato_numero = workbook.add_format({'valign': 'vcenter', 'num_format': '#,##0.00'})
             formato_encabezado_extra = workbook.add_format({'bold': True, 'bg_color': '#D9E1F2', 'align': 'center', 'valign': 'vcenter'})
@@ -194,10 +171,9 @@ with st.sidebar:
             for row_num in range(len(df_final_excel)):
                 for col_num in range(len(df_final_excel.columns)):
                     valor = df_final_excel.iloc[row_num, col_num]
-                    # Si el valor de la celda es igual al nombre de la columna, tratarlo como encabezado
                     if valor == df_final_excel.columns[col_num]:
                          worksheet.write(row_num + 1, col_num, valor, formato_encabezado_extra)
-                    elif col_num == 3 and pd.notnull(valor) and valor != "": # Columna WRSOL
+                    elif col_num == 3 and pd.notnull(valor) and valor != "": 
                          try:
                              worksheet.write_number(row_num + 1, col_num, float(valor), formato_numero)
                          except ValueError:
@@ -206,20 +182,18 @@ with st.sidebar:
                          val_str = "" if pd.isna(valor) else valor
                          worksheet.write(row_num + 1, col_num, val_str, formato_celda)
 
-            # Formatear el primer encabezado (fila 0)
             for col_num, value in enumerate(df_final_excel.columns):
                  worksheet.write(0, col_num, value, formato_encabezado_extra)
 
-            # Ajustar anchos
-            worksheet.set_column(0, 0, 8)   # BUKRS
-            worksheet.set_column(1, 1, 12)  # HKONT
-            worksheet.set_column(2, 2, 40)  # SGTXT (Glosa)
-            worksheet.set_column(3, 3, 15)  # WRSOL (Monto)
-            worksheet.set_column(4, 12, 3)  # Columnas E a M (WRHAB a PS_POSID) angostas
-            worksheet.set_column(13, 13, 12) # VALUT (Fecha)
-            worksheet.set_column(14, 15, 3)  # HBKID, HKTID angostas
-            worksheet.set_column(16, 16, 20) # ZUONR (Asignación)
-            worksheet.set_column(17, 18, 3)  # VBUND, FIPEX angostas
+            worksheet.set_column(0, 0, 8)   
+            worksheet.set_column(1, 1, 12)  
+            worksheet.set_column(2, 2, 40)  
+            worksheet.set_column(3, 3, 15)  
+            worksheet.set_column(4, 12, 3)  
+            worksheet.set_column(13, 13, 12) 
+            worksheet.set_column(14, 15, 3)  
+            worksheet.set_column(16, 16, 20) 
+            worksheet.set_column(17, 18, 3)  
             
         excel_data_total = output.getvalue()
         
@@ -239,11 +213,8 @@ with st.sidebar:
             df_dia = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] == dia].copy()
             df_export = df_dia.drop(columns=['DIA_ETIQUETA'])
             df_export['VALUT'] = pd.to_datetime(df_export['VALUT']).dt.strftime('%d/%m/%Y')
-            
-            # Asegurar WRSOL como número
             df_export['WRSOL'] = pd.to_numeric(df_export['WRSOL'], errors='coerce')
             
-            # Generar Excel para el día individual
             output_dia = io.BytesIO()
             with pd.ExcelWriter(output_dia, engine='xlsxwriter') as writer:
                 df_export.to_excel(writer, sheet_name='SAP', index=False)
@@ -256,6 +227,13 @@ with st.sidebar:
                 st.download_button(f"📄 Descargar {dia} (Excel)", excel_data_dia, f"SAP_{dia.replace(' ', '_')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
             with col_d2:
                 if st.button("❌", key=f"del_{dia}", help=f"Descartar y borrar el {dia}"):
+                    # LÓGICA DE REVERSIÓN: Restaurar filas en los DFs originales
+                    for df_name in ['df_cajas', 'df_atc', 'df_com']:
+                        if not st.session_state[df_name].empty and 'DIA_ASIGNADO' in st.session_state[df_name].columns:
+                            mask = st.session_state[df_name]['DIA_ASIGNADO'] == dia
+                            st.session_state[df_name].loc[mask, 'PROCESADO'] = False
+                            st.session_state[df_name].loc[mask, 'DIA_ASIGNADO'] = ""
+                            
                     st.session_state.plantilla_maestra = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] != dia]
                     st.rerun()
             
@@ -268,7 +246,6 @@ with st.sidebar:
 if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or not st.session_state.df_com.empty:
     col_dia, col_btn1, col_btn2, col_btn3 = st.columns([2, 1, 1, 1])
     with col_dia: 
-        # Modificación para evitar StreamlitAPIException al avanzar el día
         if 'temp_next_day' in st.session_state:
             st.session_state.dia_seleccionado = st.session_state.temp_next_day
             del st.session_state.temp_next_day
@@ -337,9 +314,15 @@ if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or n
         sel_co = edit_com[edit_com['SELECCIONAR'] == True].copy() if not edit_com.empty else pd.DataFrame()
         if sel_c.empty and sel_a.empty and sel_co.empty: st.warning("⚠️ Selecciona transacciones.")
         else:
-            if not sel_c.empty: st.session_state.df_cajas.loc[sel_c['ORIGINAL_INDEX'], 'PROCESADO'] = True
-            if not sel_a.empty: st.session_state.df_atc.loc[sel_a['ORIGINAL_INDEX'], 'PROCESADO'] = True
-            if not sel_co.empty: st.session_state.df_com.loc[sel_co['ORIGINAL_INDEX'], 'PROCESADO'] = True
+            if not sel_c.empty: 
+                st.session_state.df_cajas.loc[sel_c['ORIGINAL_INDEX'], 'PROCESADO'] = True
+                st.session_state.df_cajas.loc[sel_c['ORIGINAL_INDEX'], 'DIA_ASIGNADO'] = dia_actual
+            if not sel_a.empty: 
+                st.session_state.df_atc.loc[sel_a['ORIGINAL_INDEX'], 'PROCESADO'] = True
+                st.session_state.df_atc.loc[sel_a['ORIGINAL_INDEX'], 'DIA_ASIGNADO'] = dia_actual
+            if not sel_co.empty: 
+                st.session_state.df_com.loc[sel_co['ORIGINAL_INDEX'], 'PROCESADO'] = True
+                st.session_state.df_com.loc[sel_co['ORIGINAL_INDEX'], 'DIA_ASIGNADO'] = dia_actual
             
             def parse_m(df, col): return df[col].astype(str).str.replace(',', '.').astype(float)
             
@@ -353,7 +336,6 @@ if not st.session_state.df_cajas.empty or not st.session_state.df_atc.empty or n
             
             st.session_state.plantilla_maestra = pd.concat([st.session_state.plantilla_maestra, bloque], ignore_index=True)
             
-            # Modificación: En lugar de asignar directo al widget en esta misma carga, lo delegamos
             current_day_num = int(dia_actual.replace("Día ", ""))
             next_day_num = min(current_day_num + 1, 31)
             st.session_state.temp_next_day = f"Día {next_day_num}"
