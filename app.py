@@ -66,6 +66,65 @@ def procesar_subida_multiple(lista_archivos, state_name, state_df, tipo_archivo)
             st.session_state[state_df] = pd.DataFrame()
         st.session_state[state_name] = nombres_actuales
 
+# --- FUNCIONES DE FORMATO EXCEL ---
+def aplicar_formato_excel(writer, df, sheet_name="SAP"):
+    # Obtener el workbook y el worksheet de xlsxwriter
+    workbook = writer.book
+    worksheet = writer.sheets[sheet_name]
+
+    # Definir formatos
+    formato_encabezado = workbook.add_format({
+        'bold': True,
+        'bg_color': '#D9E1F2',  # Azul claro
+        'border': 1,
+        'align': 'center',
+        'valign': 'vcenter'
+    })
+    
+    formato_celda = workbook.add_format({
+        'border': 1,
+        'valign': 'vcenter'
+    })
+    
+    formato_numero = workbook.add_format({
+        'border': 1,
+        'valign': 'vcenter',
+        'num_format': '#,##0.00'  # Formato numérico estándar de Excel
+    })
+
+    # Escribir encabezados
+    for col_num, value in enumerate(df.columns):
+        worksheet.write(0, col_num, value, formato_encabezado)
+
+    # Escribir datos
+    for row_num in range(len(df)):
+        for col_num in range(len(df.columns)):
+            valor = df.iloc[row_num, col_num]
+            # Aplicar formato de número a la columna WRSOL (índice 3, ya que DIA_ETIQUETA se elimina antes)
+            if col_num == 3 and pd.notnull(valor):
+                 worksheet.write(row_num + 1, col_num, valor, formato_numero)
+            else:
+                 # Reemplazar NaN con string vacío para Excel
+                 val_str = "" if pd.isna(valor) else valor
+                 worksheet.write(row_num + 1, col_num, val_str, formato_celda)
+
+    # Ajustar anchos de columna
+    # Columnas con datos: BUKRS(0), HKONT(1), SGTXT(2), WRSOL(3)
+    worksheet.set_column(0, 0, 8)   # BUKRS
+    worksheet.set_column(1, 1, 12)  # HKONT
+    worksheet.set_column(2, 2, 40)  # SGTXT (Glosa)
+    worksheet.set_column(3, 3, 15)  # WRSOL (Monto)
+    
+    # Columnas E a M (índices 4 a 12): WRHAB, DMBTR, DMBE2, MWSKZ, TXJCD, KOSTL, PRCTR, AUFNR, PS_POSID
+    worksheet.set_column(4, 12, 3)  # Muy angostas
+    
+    # Resto de columnas
+    worksheet.set_column(13, 13, 12) # VALUT (Fecha)
+    worksheet.set_column(14, 15, 3)  # HBKID, HKTID angostas
+    worksheet.set_column(16, 16, 20) # ZUONR (Asignación)
+    worksheet.set_column(17, 18, 3)  # VBUND, FIPEX angostas
+
+
 # --- PANEL LATERAL ---
 with st.sidebar:
     st.header("⚙️ Módulo de Ingesta")
@@ -82,10 +141,6 @@ with st.sidebar:
         dias_procesados = st.session_state.plantilla_maestra['DIA_ETIQUETA'].unique()
         st.success(f"📊 {len(dias_procesados)} periodos listos:")
         
-        def format_num(val):
-            try: return f"{float(val):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-            except: return val
-
         # --- BOTÓN DE EXPORTACIÓN CONSOLIDADA TOTAL ---
         df_total = st.session_state.plantilla_maestra.copy()
         df_total['num_dia'] = df_total['DIA_ETIQUETA'].str.replace('Día ', '').astype(int)
@@ -93,33 +148,86 @@ with st.sidebar:
         # Ordenamos y separamos por bloques
         dias_ordenados_totales = sorted(df_total['num_dia'].unique())
         
-        csv_blocks = []
-        for idx, n_dia in enumerate(dias_ordenados_totales):
-            dia_str = f"Día {n_dia}"
-            df_dia_bloque = df_total[df_total['DIA_ETIQUETA'] == dia_str].copy()
-            df_export_bloque = df_dia_bloque.drop(columns=['DIA_ETIQUETA', 'num_dia'])
+        # Crear un buffer de Excel en memoria
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             
-            df_export_bloque['VALUT'] = pd.to_datetime(df_export_bloque['VALUT']).dt.strftime('%d/%m/%Y')
-            df_export_bloque['WRSOL'] = df_export_bloque['WRSOL'].apply(format_num)
+            # Preparar un DataFrame consolidado con filas en blanco
+            dfs_a_concatenar = []
             
-            # Generar CSV de este bloque de día individual (Incluyendo encabezado)
-            csv_str = df_export_bloque.to_csv(index=False, sep='|', header=True)
+            # Fila vacía para los separadores
+            fila_vacia = pd.DataFrame([[""] * (len(df_total.columns) - 2)], columns=df_total.drop(columns=['DIA_ETIQUETA', 'num_dia']).columns)
             
-            # Si no es el primer bloque insertamos las 3 filas vacías con la estructura correcta
-            if idx > 0:
-                # 19 columnas requieren 18 separadores '|' para mantener la tabla intacta en Excel
-                fila_vacia = "|" * (len(df_export_bloque.columns) - 1) + "\n"
-                csv_blocks.append(fila_vacia * 3)
+            for idx, n_dia in enumerate(dias_ordenados_totales):
+                dia_str = f"Día {n_dia}"
+                df_dia_bloque = df_total[df_total['DIA_ETIQUETA'] == dia_str].copy()
+                df_export_bloque = df_dia_bloque.drop(columns=['DIA_ETIQUETA', 'num_dia'])
                 
-            csv_blocks.append(csv_str)
+                df_export_bloque['VALUT'] = pd.to_datetime(df_export_bloque['VALUT']).dt.strftime('%d/%m/%Y')
+                
+                # Convertir WRSOL a numérico para que Excel lo formatee bien
+                df_export_bloque['WRSOL'] = pd.to_numeric(df_export_bloque['WRSOL'], errors='coerce')
+                
+                # Si no es el primer bloque, insertar filas separadoras e intentar recrear el encabezado
+                if idx > 0:
+                    dfs_a_concatenar.extend([fila_vacia, fila_vacia, fila_vacia])
+                    # Insertar una fila que funcione como encabezado visual
+                    df_header = pd.DataFrame([df_export_bloque.columns], columns=df_export_bloque.columns)
+                    dfs_a_concatenar.append(df_header)
+                    
+                dfs_a_concatenar.append(df_export_bloque)
+
+            df_final_excel = pd.concat(dfs_a_concatenar, ignore_index=True)
             
-        csv_total_estructurado = "".join(csv_blocks)
+            # Escribir al Excel
+            df_final_excel.to_excel(writer, sheet_name='SAP', index=False)
+            
+            # Obtener workbook y worksheet
+            workbook = writer.book
+            worksheet = writer.sheets['SAP']
+
+            # Formato de celdas y numérico
+            formato_celda = workbook.add_format({'valign': 'vcenter'})
+            formato_numero = workbook.add_format({'valign': 'vcenter', 'num_format': '#,##0.00'})
+            formato_encabezado_extra = workbook.add_format({'bold': True, 'bg_color': '#D9E1F2', 'align': 'center', 'valign': 'vcenter'})
+
+            for row_num in range(len(df_final_excel)):
+                for col_num in range(len(df_final_excel.columns)):
+                    valor = df_final_excel.iloc[row_num, col_num]
+                    # Si el valor de la celda es igual al nombre de la columna, tratarlo como encabezado
+                    if valor == df_final_excel.columns[col_num]:
+                         worksheet.write(row_num + 1, col_num, valor, formato_encabezado_extra)
+                    elif col_num == 3 and pd.notnull(valor) and valor != "": # Columna WRSOL
+                         try:
+                             worksheet.write_number(row_num + 1, col_num, float(valor), formato_numero)
+                         except ValueError:
+                             worksheet.write(row_num + 1, col_num, valor, formato_celda)
+                    else:
+                         val_str = "" if pd.isna(valor) else valor
+                         worksheet.write(row_num + 1, col_num, val_str, formato_celda)
+
+            # Formatear el primer encabezado (fila 0)
+            for col_num, value in enumerate(df_final_excel.columns):
+                 worksheet.write(0, col_num, value, formato_encabezado_extra)
+
+            # Ajustar anchos
+            worksheet.set_column(0, 0, 8)   # BUKRS
+            worksheet.set_column(1, 1, 12)  # HKONT
+            worksheet.set_column(2, 2, 40)  # SGTXT (Glosa)
+            worksheet.set_column(3, 3, 15)  # WRSOL (Monto)
+            worksheet.set_column(4, 12, 3)  # Columnas E a M (WRHAB a PS_POSID) angostas
+            worksheet.set_column(13, 13, 12) # VALUT (Fecha)
+            worksheet.set_column(14, 15, 3)  # HBKID, HKTID angostas
+            worksheet.set_column(16, 16, 20) # ZUONR (Asignación)
+            worksheet.set_column(17, 18, 3)  # VBUND, FIPEX angostas
+            
+        excel_data_total = output.getvalue()
         
         st.download_button(
-            label="📦 Descargar Consolidado Total", 
-            data=csv_total_estructurado, 
-            file_name="SAP_CONSOLIDADO_COMPLETO.csv", 
-            mime="text/csv", 
+            label="📦 Descargar Consolidado Total (Excel)", 
+            data=excel_data_total, 
+            file_name="SAP_CONSOLIDADO_COMPLETO.xlsx", 
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
             use_container_width=True,
             type="primary"
         )
@@ -131,12 +239,21 @@ with st.sidebar:
             df_dia = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] == dia].copy()
             df_export = df_dia.drop(columns=['DIA_ETIQUETA'])
             df_export['VALUT'] = pd.to_datetime(df_export['VALUT']).dt.strftime('%d/%m/%Y')
-            df_export['WRSOL'] = df_export['WRSOL'].apply(format_num)
-            csv = df_export.to_csv(index=False, sep='|', header=True)
+            
+            # Asegurar WRSOL como número
+            df_export['WRSOL'] = pd.to_numeric(df_export['WRSOL'], errors='coerce')
+            
+            # Generar Excel para el día individual
+            output_dia = io.BytesIO()
+            with pd.ExcelWriter(output_dia, engine='xlsxwriter') as writer:
+                df_export.to_excel(writer, sheet_name='SAP', index=False)
+                aplicar_formato_excel(writer, df_export)
+                
+            excel_data_dia = output_dia.getvalue()
             
             col_d1, col_d2 = st.columns([4, 1])
             with col_d1:
-                st.download_button(f"📄 Descargar {dia}", csv, f"SAP_{dia.replace(' ', '_')}.csv", mime="text/csv", use_container_width=True)
+                st.download_button(f"📄 Descargar {dia} (Excel)", excel_data_dia, f"SAP_{dia.replace(' ', '_')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
             with col_d2:
                 if st.button("❌", key=f"del_{dia}", help=f"Descartar y borrar el {dia}"):
                     st.session_state.plantilla_maestra = st.session_state.plantilla_maestra[st.session_state.plantilla_maestra['DIA_ETIQUETA'] != dia]
